@@ -98,14 +98,31 @@ function render() {
   preview.getContext('2d').drawImage(canvas, 0, 0);
 }
 
+async function bitmapFrom(source) {
+  if (typeof source === 'string') {
+    const blob = await (await fetch(source)).blob();
+    try {
+      return await createImageBitmap(blob);
+    } catch {
+      // iOS Safari / format edge cases: fall back to <img> (drawImage accepts it).
+      const url = URL.createObjectURL(blob);
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = url;
+      });
+    }
+  }
+  return source;
+}
+
 async function loadImage(urlOrBitmap) {
-  const bitmap =
-    typeof urlOrBitmap === 'string'
-      ? await createImageBitmap(await (await fetch(urlOrBitmap)).blob())
-      : urlOrBitmap;
+  const bitmap = await bitmapFrom(urlOrBitmap);
   source = bitmap;
-  sourceW = bitmap.width;
-  sourceH = bitmap.height;
+  sourceW = bitmap.width || bitmap.naturalWidth;
+  sourceH = bitmap.height || bitmap.naturalHeight;
+  if (!sourceW || !sourceH) throw new Error('Ảnh không đọc được (0 kích thước)');
   mask = null;
   activeMask = null;
   instances = [];
@@ -116,7 +133,6 @@ async function loadImage(urlOrBitmap) {
   preview.height = canvas.height;
   preview.getContext('2d').drawImage(canvas, 0, 0);
   log(`Đã nạp ảnh ${sourceW}×${sourceH}`);
-  await refreshModelStatus();
 }
 
 async function refreshModelStatus() {
@@ -350,9 +366,9 @@ $('#export').addEventListener('click', async () => {
   }
 });
 
-// --- boot ---
+// --- boot: image first (engine probe must not block painting) ---
 log('Panel AI sẵn sàng. Chọn ảnh mẫu hoặc tải ảnh lên.');
-ensureAI().then(() => {
-  loadImage(new URL('../test-assets/portrait.jpg', location.href).href).catch((e) => log(errorText(e)));
-  refreshModelStatus();
-}).catch((e) => log(errorText(e)));
+loadImage(new URL('../test-assets/portrait.jpg', location.href).href)
+  .then(() => refreshModelStatus())
+  .catch((e) => log(`Nạp ảnh thất bại: ${errorText(e)}`));
+ensureAI().catch((e) => log(`Tạo engine thất bại: ${errorText(e)}`));
