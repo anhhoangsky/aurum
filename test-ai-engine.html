@@ -76,11 +76,11 @@ check('IoU identical = 1', iou(sq, sq) === 1);
 check('Dice identical = 1', dice(sq, sq) === 1);
 check('AlphaMAE identical = 0', alphaMAE(sq, sq) === 0);
 check('BoundaryF identical = 1', boundaryFScore(sq, sq, 1) === 1);
-const other = createMask(8, 8); // truly disjoint: 3x3 at bottom-right
-for (let y = 5; y < 8; y += 1) for (let x = 5; x < 8; x += 1) other.data[y * 8 + x] = 1;
+const other = createMask(8, 8); // truly disjoint: 2x2 at bottom-right
+for (let y = 6; y < 8; y += 1) for (let x = 6; x < 8; x += 1) other.data[y * 8 + x] = 1;
 check('IoU disjoint = 0', iou(sq, other) === 0);
 check('Dice disjoint = 0', dice(sq, other) === 0);
-check('AlphaMAE disjoint = 25/64', approx(alphaMAE(sq, other), 25 / 64));
+check('AlphaMAE disjoint = 20/64', approx(alphaMAE(sq, other), 20 / 64));
 
 // --- registry / device / planner (no model bytes needed) ---
 check('registry lists 9 models', listModels().length === 9 && MODEL_REGISTRY.length === 9);
