@@ -116,6 +116,28 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
       'Prefer fp16 on iPhone; fp32 is the fallback for backends without fp16 support.',
   },
   {
+    id: 'mediapipe-selfie-segmenter',
+    version: '1.0.0',
+    label: 'MediaPipe Selfie Segmenter (person segmentation baseline)',
+    task: 'person-segmentation',
+    source:
+      'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite',
+    sizeBytes: 249_537,
+    // Verified locally 2026-11-09 against the downloaded bytes.
+    sha256: '191ac9529ae506ee0beeaa6d1c7bc96da4ee8c4038226658b',
+    license: 'Apache-2.0 (MediaPipe, Google) — verify per-artifact',
+    supportedBackends: ['wasm'],
+    inputResolutions: [256],
+    quantization: 'fp16',
+    memoryMB: 32,
+    status: 'installable',
+    notes:
+      'Phase 4 baseline. Binary semantic person mask (category 1) via tasks-vision ' +
+      'ImageSegmenter; instances come from connected components (mask.ts), so ' +
+      'touching people stay merged — documented, not hidden. Runs on self-hosted ' +
+      'WASM fileset like src/landmarks. NOT alpha matting, NOT per-instance SAM.',
+  },
+  {
     id: 'longpipe-xl',
     version: '0.0.0-unpinned',
     label: 'LongPipe XL (person matting)',

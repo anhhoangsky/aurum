@@ -87,6 +87,14 @@ export interface RemoveBackgroundOptions {
   onProgress?: (stage: string, done?: number, total?: number) => void;
 }
 
+export interface SegmentPeopleOptions {
+  signal?: AbortSignal;
+  /** Drop components smaller than this (source pixels). Defaults to 64 in
+   *  the working mask resolution. */
+  minArea?: number;
+  threshold?: number;
+}
+
 export interface SegmentObjectsOptions {
   interactive?: boolean;
   point?: { x: number; y: number };
@@ -113,7 +121,7 @@ export interface AurumAI {
   mattePerson(source: AISource, options?: RemoveBackgroundOptions): Promise<AIResult>;
   replaceBackground(source: AISource, background: AISource, options?: RemoveBackgroundOptions): Promise<AIResult>;
   blurBackground(source: AISource, options?: RemoveBackgroundOptions): Promise<AIResult>;
-  segmentPeople(source: AISource, options?: { signal?: AbortSignal }): Promise<AIResult>;
+  segmentPeople(source: AISource, options?: SegmentPeopleOptions): Promise<AIResult>;
   segmentObjects(source: AISource, options?: SegmentObjectsOptions): Promise<AIResult>;
   getInstalledModels(): Promise<InstalledModel[]>;
   installModel(id: string, url: string, signal?: AbortSignal): Promise<InstalledModel>;

@@ -24,6 +24,7 @@ export {
   brushDab,
   cloneMask,
   combineMasks,
+  connectedComponents,
   createMask,
   featherMask,
   invertMask,
@@ -32,9 +33,11 @@ export {
   resizeMask,
   thresholdMask,
 } from './mask';
-export type { Mask } from './mask';
+export type { Mask, MaskComponent } from './mask';
 export { alphaMAE, boundaryFScore, dice, iou } from './metrics';
 export { compositeTransparentPNG, previewCheckerboard } from './adapter';
+export { segmentPersonWithSelfie, closeSelfieSegmenter } from './selfie';
+export type { SelfieSegmenterOptions } from './selfie';
 export type {
   AIError,
   AIInputResolution,

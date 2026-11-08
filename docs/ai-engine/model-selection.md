@@ -102,6 +102,23 @@ Phase 3 plan, in order:
 
 ## C. Person / object instance segmentation
 
+**Attempted and rejected (2026-11-09): `Acly/MobileSAM` ONNX.** Downloaded the
+encoder (28.2 MB) + multi decoder (16.5 MB, SHA-256 verified against LFS oid)
+and ran point/box prompts via Python ONNX Runtime (`benchmark/phase4-smoke.py`):
+- Encoder output `[1,256,64,64]` is healthy; decoder runs in ~60 ms.
+- But masks are not prompt-faithful: box prompt → a filled rectangle, not a
+  person; point prompts → partial masks (15–20%); IoU predictions exceed 1.0
+  (0.884–1.005), which is impossible for a calibrated head.
+- Conclusion: the 2023 export is broken/unverified. **Not shipped.** A SAM-class
+  model here requires a validated export (e.g. transformers.js one) — blocker.
+
+**Shipped Phase 4 path: MediaPipe Selfie Segmenter + connected components.**
+Semantic person mask → 4-connected components in `mask.ts` → one independent
+mask + box + confidence per component. Interactive point/box selects the
+instance containing/overlapping the prompt. Touching/overlapping people that
+form one component stay merged (documented limitation). Arbitrary non-person
+objects remain `not-supported` pending a validated SAM export.
+
 | Candidate | What it actually does | iPhone fit |
 |---|---|---|
 | **EdgeTAM** (SAM 2 derivative) | Promptable (point/box) *video* object segmentation/tracking, 2D spatial perceiver, real-time on phone at ~16 FPS per CVPR'25 paper | Good candidate for interactive object masks; encoder + memory attention must be measured, not assumed |

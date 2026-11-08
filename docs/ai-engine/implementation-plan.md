@@ -34,7 +34,7 @@ engine never fabricates masks.
 | 2 | Hair/edge quality vs ground truth | **Not yet benchmarked** (no ground-truth set yet) |
 | 3 | Person matting (LongPipe XL) | **Blocked**: artifact unverifiable (see model-selection.md §B) |
 | 3 | Person matting (MODNet fallback, pinned + smoke-tested) | **Implemented** (`mattePerson()`, `models.ts` MODNet adapter); portrait matte verified in Python smoke; **not benchmarked vs GT**; browser E2E pending |
-| 4 | Instance / interactive segmentation | **Not yet supported** — returns `not-supported` honestly |
+| 4 | Instance / interactive segmentation | **Partially Implemented**: `segmentPeople()` via MediaPipe Selfie + connected components + interactive point/box selection over person instances (`selfie.ts`); **not tested in browser** (needs self-hosted tasks-vision fileset); MobileSAM/Acly ONNX export attempted and **rejected as broken** (see below); arbitrary non-person objects still `not-supported` |
 | 5 | Editor adapter + panels + undo/redo | **Partially**: headless adapter + checkerboard preview implemented; UI panels not started |
 | 6 | iPhone optimization | **Not yet supported** — needs real-device testing |
 | — | Benchmark dashboard, ground-truth set, metrics formulas | Metrics **implemented** (`metrics.ts`: IoU/Dice/Boundary F/Alpha MAE); dataset + dashboard **not started** |

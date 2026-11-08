@@ -17,7 +17,8 @@ import { installModelBytes, listInstalledModels, loadModelBytes } from './cache'
 import { JobQueue } from './queue';
 import { planSegmentation, type SegmentationPlan } from './memory';
 import { createSession, type RuntimeOptions } from './runtime';
-import { applyAlpha, featherMask, morphMask, resizeMask, type Mask } from './mask';
+import { applyAlpha, connectedComponents, featherMask, morphMask, resizeMask, type Mask } from './mask';
+import { segmentPersonWithSelfie, closeSelfieSegmenter, type SelfieSegmenterOptions } from './selfie';
 import type {
   AIError,
   AIInputResolution,
@@ -30,6 +31,7 @@ import type {
   InstalledModel,
   RemoveBackgroundOptions,
   SegmentObjectsOptions,
+  SegmentPeopleOptions,
 } from './types';
 
 export interface AurumAICreateOptions extends AurumAIOptions {
@@ -41,6 +43,9 @@ export interface AurumAICreateOptions extends AurumAIOptions {
    * the fp32 artifact is used when only it is installed (backend fallback).
    */
   modelId?: string;
+  /** Self-hosted MediaPipe selfie segmenter assets (Phase 4). When absent,
+   *  segmentPeople/segmentObjects report `not-supported`. */
+  mediapipe?: SelfieSegmenterOptions;
 }
 
 function failure(
@@ -115,6 +120,7 @@ class AurumAIImpl implements AurumAI {
   private readonly runtime?: RuntimeOptions['runtime'];
   private readonly onStatus?: (message: string) => void;
   private readonly modelId: string;
+  private readonly mediapipe?: SelfieSegmenterOptions;
   private readonly queue = new JobQueue();
   private disposed = false;
 
@@ -125,6 +131,7 @@ class AurumAIImpl implements AurumAI {
     this.runtime = options.runtime;
     this.onStatus = options.onStatus;
     this.modelId = options.modelId ?? 'birefnet-lite-512-fp16';
+    this.mediapipe = options.mediapipe;
   }
 
   /** Exposed for tests/diagnostics; not part of the public AurumAI contract. */
@@ -316,20 +323,128 @@ class AurumAIImpl implements AurumAI {
     };
   }
 
-  async segmentPeople(_source: AISource, _options?: { signal?: AbortSignal }): Promise<AIResult> {
-    // No instance-capable model is installed yet (Phase 4). Semantic person
-    // segmentation (MediaPipe) must not be presented as instance separation.
-    return failure('person-segmentation', this.quality, {
-      code: 'not-supported',
-      message: 'Per-person instance segmentation is not yet supported (no instance model installed).',
-    });
+  async segmentPeople(source: AISource, options: SegmentPeopleOptions = {}): Promise<AIResult> {
+    if (!this.mediapipe) {
+      return failure('person-segmentation', this.quality, {
+        code: 'not-supported',
+        message:
+          'MediaPipe selfie segmenter is not configured (no mediapipe assets in AurumAI.create()).',
+      });
+    }
+    const run = async (signal: AbortSignal): Promise<AIResult> => {
+      const { width, height } = sourceSize(source);
+      if (!width || !height) {
+        return failure('person-segmentation', this.quality, {
+          code: 'invalid-input',
+          message: 'segmentPeople needs a non-empty image',
+        });
+      }
+      this.onStatus?.('Detecting people (selfie segmenter)…');
+      const started = performance.now();
+      const { mask: rawMask, inferenceMs } = await segmentPersonWithSelfie(source, {
+        ...this.mediapipe!,
+        signal,
+      });
+      signal.throwIfAborted();
+      // Instances = connected components of the semantic person mask,
+      // each upscaled to original resolution.
+      const components = connectedComponents(
+        rawMask,
+        options.threshold ?? 0.5,
+        options.minArea ?? 64,
+      );
+      const instances = components.map((comp) => ({
+        id: comp.id,
+        label: 'person',
+        confidence: comp.confidence,
+        mask: resizeMask(comp.mask, width, height),
+        box: {
+          x: (comp.box.x / rawMask.width) * width,
+          y: (comp.box.y / rawMask.height) * height,
+          w: (comp.box.w / rawMask.width) * width,
+          h: (comp.box.h / rawMask.height) * height,
+        },
+      }));
+      const descriptor = getModelDescriptor('mediapipe-selfie-segmenter');
+      return {
+        success: true,
+        task: 'person-segmentation',
+        masks: [resizeMask(rawMask, width, height)],
+        instances,
+        metadata: {
+          modelId: 'mediapipe-selfie-segmenter',
+          modelVersion: descriptor?.version ?? '',
+          backend: 'wasm',
+          inputResolution: [rawMask.width, rawMask.height],
+          inferenceTime: inferenceMs,
+          quality: this.quality,
+          installedModel: true,
+        },
+      };
+    };
+    try {
+      const started = performance.now();
+      void started;
+      return await this.queue.enqueue({ run, signal: options.signal });
+    } catch (error) {
+      if ((error as Error)?.name === 'AbortError') {
+        return failure('person-segmentation', this.quality, { code: 'aborted', message: 'Aborted' });
+      }
+      throw error;
+    }
   }
 
-  async segmentObjects(_source: AISource, _options?: SegmentObjectsOptions): Promise<AIResult> {
-    return failure('object-segmentation', this.quality, {
-      code: 'not-supported',
-      message: 'Interactive object segmentation is not yet supported (MobileSAM/EdgeTAM not installed).',
-    });
+  async segmentObjects(source: AISource, options: SegmentObjectsOptions = {}): Promise<AIResult> {
+    // Interactive selection over person instances (Phase 4 scope). Arbitrary
+    // objects await a verified SAM-class model (MobileSAM export currently
+    // unverified — see docs/ai-engine/model-selection.md §C).
+    if (!options.interactive || (!options.point && !options.box)) {
+      return failure('object-segmentation', this.quality, {
+        code: 'not-supported',
+        message: 'Automatic (non-interactive) object segmentation is not supported.',
+      });
+    }
+    const people = await this.segmentPeople(source, { signal: options.signal });
+    if (!people.success) {
+      return failure('object-segmentation', this.quality, {
+        code: people.error?.code ?? 'not-supported',
+        message: 'No person instances to select. Arbitrary-object segmentation needs a SAM-class model (not installed).',
+      });
+    }
+    const { width, height } = sourceSize(source);
+    let chosen = people.instances[0];
+    if (options.point) {
+      const px = Math.round(options.point.x * width);
+      const py = Math.round(options.point.y * height);
+      chosen = people.instances.find(
+        (inst) => inst.mask.data[py * width + px]! >= 0.5,
+      ) ?? chosen;
+    } else if (options.box) {
+      const b = options.box;
+      let best = -1;
+      for (const inst of people.instances) {
+        const ib = inst.box ?? { x: 0, y: 0, w: 0, h: 0 };
+        const ix = Math.max(0, Math.min(ib.x + ib.w, b.x + b.w) - Math.max(ib.x, b.x));
+        const iy = Math.max(0, Math.min(ib.y + ib.h, b.y + b.h) - Math.max(ib.y, b.y));
+        const overlap = ix * iy;
+        if (overlap > best) {
+          best = overlap;
+          chosen = inst;
+        }
+      }
+    }
+    if (!chosen) {
+      return failure('object-segmentation', this.quality, {
+        code: 'not-supported',
+        message: 'Prompt did not intersect any detected person instance.',
+      });
+    }
+    return {
+      ...people,
+      task: 'object-segmentation',
+      masks: [chosen.mask],
+      instances: [chosen],
+    };
   }
 
   async getInstalledModels(): Promise<InstalledModel[]> {
@@ -349,6 +464,7 @@ class AurumAIImpl implements AurumAI {
 
   dispose(): void {
     this.disposed = true;
+    closeSelfieSegmenter();
   }
 }
 

@@ -221,3 +221,85 @@ export function maskToRGBA(mask: Mask): { width: number; height: number; data: U
   }
   return { width: mask.width, height: mask.height, data };
 }
+
+export interface MaskComponent {
+  id: number;
+  mask: Mask;
+  area: number;
+  /** Mean probability inside the component (0..1). */
+  confidence: number;
+  box: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * Split a binarized mask into 4-connected components (flood fill).
+ * Components smaller than `minArea` are dropped. This is how one semantic
+ * person mask becomes per-instance masks — touching/overlapping people that
+ * form a single component stay merged (documented limitation, not hidden).
+ */
+export function connectedComponents(
+  mask: Mask,
+  threshold = 0.5,
+  minArea = 64,
+): MaskComponent[] {
+  const { width: w, height: h } = mask;
+  const labels = new Int32Array(w * h).fill(-1);
+  const stats = new Map<
+    number,
+    { area: number; sum: number; minX: number; minY: number; maxX: number; maxY: number }
+  >();
+  const stack: number[] = [];
+  let nextId = 0;
+
+  for (let start = 0; start < w * h; start += 1) {
+    if (labels[start] !== -1 || mask.data[start]! < threshold) continue;
+    const id = nextId;
+    nextId += 1;
+    let area = 0;
+    let sum = 0;
+    let minX = w;
+    let minY = h;
+    let maxX = 0;
+    let maxY = 0;
+    stack.length = 0;
+    stack.push(start);
+    labels[start] = id;
+    while (stack.length > 0) {
+      const i = stack.pop()!;
+      const x = i % w;
+      const y = (i / w) | 0;
+      area += 1;
+      sum += mask.data[i]!;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      const neighbours = [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1];
+      for (const n of neighbours) {
+        if (n >= 0 && labels[n] === -1 && mask.data[n]! >= threshold) {
+          labels[n] = id;
+          stack.push(n);
+        }
+      }
+    }
+    if (area >= minArea) {
+      stats.set(id, { area, sum, minX, minY, maxX, maxY });
+    }
+  }
+  const components: MaskComponent[] = [];
+  for (const [id, st] of [...stats.entries()].sort((a, b) => a[0] - b[0])) {
+    components.push({
+      id,
+      mask: createMask(w, h),
+      area: st.area,
+      confidence: st.sum / st.area,
+      box: { x: st.minX, y: st.minY, w: st.maxX - st.minX + 1, h: st.maxY - st.minY + 1 },
+    });
+  }
+  const byId = new Map(components.map((c) => [c.id, c]));
+  for (let i = 0; i < w * h; i += 1) {
+    const comp = byId.get(labels[i]);
+    if (comp && mask.data[i]! >= threshold) comp.mask.data[i] = 1;
+  }
+  return components;
+}
