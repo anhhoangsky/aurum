@@ -14,7 +14,7 @@ import {
   featherMask,
   morphMask,
   invertMask,
-} from '../dist/aurum-ai-engine.esm.js';
+} from '../assets/aurum-ai-engine.esm.js';
 
 const $ = (sel) => document.querySelector(sel);
 const preview = $('#preview');
@@ -23,8 +23,12 @@ const runMeta = $('#run-meta');
 const modelStatus = $('#model-status');
 
 const RUNTIME = {
-  webgpu: new URL('../dist/ai/ort.webgpu.bundle.min.mjs', location.href).href,
-  wasm: new URL('../dist/ai/ort.wasm.bundle.min.mjs', location.href).href,
+  // Pinned ORT Web 1.31.1 from CDN (matches devDependency). For production,
+  // self-host these bundles + .wasm files (see build.mjs dist/ai copies):
+  // the model weights are still pinned + SHA-256 verified, and inference
+  // itself makes no network calls.
+  webgpu: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.webgpu.min.mjs',
+  wasm: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.mjs',
 };
 
 let ai = null;

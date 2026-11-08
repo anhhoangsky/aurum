@@ -8,6 +8,7 @@ const root = path.dirname(fileURLToPath(import.meta.url)) + '/..';
 const files = [
   'aurum.esm.js',
   'aurum-ai.esm.js',
+  'aurum-ai-engine.esm.js',
   'aurum-beauty.esm.js',
   'aurum-landmarks.esm.js',
   'aurum.css',
