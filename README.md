@@ -4,6 +4,10 @@ Aurum is a self-contained, browser-native image editor: a gold, liquid-glass
 UI over a headless core (crop, rotate, flip, curves, HSL, LUT presets, and
 export to JPEG/PNG/WebP through the browser's own encoders).
 
+## Demo
+
+![[aurum editor — liquid glass](https://anhhoangsky.github.io/aurum/editor)]
+
 ## Layout
 
 ```
@@ -37,10 +41,6 @@ photos in `demo/`, or use `?src=<url>` to load an arbitrary image.
 The demo harness installs the Trusted Types shims
 (`assets/demo-shim.js`) separately so the engine works under a
 `require-trusted-types-for 'script'` CSP.
-
-## Demo
-
-![[aurum editor — liquid glass](https://anhhoangsky.github.io/aurum/editor)]
 
 ## Configuration contract
 
