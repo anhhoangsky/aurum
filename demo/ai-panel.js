@@ -198,6 +198,25 @@ $('#install').addEventListener('click', async () => {
 });
 
 // --- run ---
+async function ensureInstalled(id) {
+  const engine = await ensureAI();
+  const installed = (await engine.getInstalledModels().catch(() => [])).map((m) => m.id);
+  if (installed.includes(id)) return;
+  const progress = $('#install-progress');
+  progress.hidden = false;
+  progress.value = 0;
+  $('#install').disabled = true;
+  log(`Chưa có ${id} — đang tự cài (tải 1 lần, kiểm tra SHA-256). Giữ nguyên trang…`);
+  try {
+    await engine.installModel(id, '', undefined);
+    progress.value = 100;
+    log(`Đã cài ${id}.`);
+  } finally {
+    progress.hidden = true;
+    refreshModelStatus();
+  }
+}
+
 $('#run').addEventListener('click', async () => {
   if (!source) {
     log('Chưa có ảnh.');
@@ -206,6 +225,12 @@ $('#run').addEventListener('click', async () => {
   const engine = await ensureAI();
   const id = $('#model').value;
   aborter = new AbortController();
+  try {
+    await ensureInstalled(id);
+  } catch (err) {
+    log(`Cài ${id} thất bại: ${errorText(err)}`);
+    return;
+  }
   log(`Đang chạy ${id}…`);
   try {
     const result =
