@@ -186,6 +186,17 @@ class AurumAIImpl implements AurumAI {
       }
       const descriptor = getModelDescriptor(modelId);
       const plan = planSegmentation(width, height, this.device, adapter.inputSize);
+      // iOS Safari kills the tab (uncatchable OOM) when weights + activations
+      // exceed the budget. Refuse upfront with a clear error instead.
+      const estimatedPeakMB = plan.estimatedPeakMB + (descriptor?.memoryMB ?? 0);
+      if (estimatedPeakMB > this.device.memoryBudgetMB) {
+        return failure(task, this.quality, {
+          code: 'out-of-memory',
+          message:
+            `Ước tính bộ nhớ ${estimatedPeakMB} MB vượt ngân sách thiết bị ${this.device.memoryBudgetMB} MB (${modelId}). ` +
+            'Trên iPhone, dùng MODNet (13 MB) thay vì BiRefNet (94 MB).',
+        });
+      }
       this.onStatus?.(`AI input ${plan.inputSize}px (${this.backend})…`);
       const loaded = await createSession(
         bytes,
