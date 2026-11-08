@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aurum AI Engine — smoke tests</title>
+<style>
+  body { margin: 0; padding: 16px; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; background: #101014; color: #ece9e2; }
+  pre { white-space: pre-wrap; }
+  .pass { color: #7dd87d; } .fail { color: #ff7a7a; }
+</style>
+</head>
+<body>
+<pre id="out">running…</pre>
+<script type="module">
+import {
+  createMask, invertMask, thresholdMask, featherMask, morphMask,
+  resizeMask, combineMasks, brushDab, applyAlpha,
+  iou, dice, alphaMAE, boundaryFScore,
+  MODEL_REGISTRY, listModels, resolveDeviceProfile, planSegmentation,
+  create, previewCheckerboard,
+} from './dist/aurum-ai-engine.esm.js';
+
+const lines = [];
+let failures = 0;
+function check(name, cond, detail = '') {
+  lines.push(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  ' + detail : ''}`);
+  if (!cond) failures += 1;
+}
+function approx(a, b, eps = 0.02) { return Math.abs(a - b) <= eps; }
+
+// --- mask primitives (synthetic 8x8 square) ---
+const sq = createMask(8, 8);
+for (let y = 2; y < 6; y += 1) for (let x = 2; x < 6; x += 1) sq.data[y * 8 + x] = 1;
+check('createMask square has 16 foreground px', sq.data.reduce((s, v) => s + v, 0) === 16);
+
+const inv = invertMask(sq);
+check('invertMask flips square to 48', inv.data.reduce((s, v) => s + v, 0) === 48);
+
+const soft = createMask(4, 4, 0.4);
+check('thresholdMask 0.5 -> all zero', thresholdMask(soft, 0.5).data.every((v) => v === 0));
+check('thresholdMask 0.3 -> all one', thresholdMask(soft, 0.3).data.every((v) => v === 1));
+
+const fea = featherMask(sq, 1);
+const edgeVal = fea.data[2 * 8 + 2];
+check('featherMask softens edges (0<edge<1)', edgeVal > 0 && edgeVal < 1, `edge=${edgeVal.toFixed(3)}`);
+check('featherMask preserves interior', fea.data[4 * 8 + 4] === 1);
+
+const exp = morphMask(sq, 1, 'expand');
+check('expand grows square 4x4 -> 6x6', exp.data.reduce((s, v) => s + v, 0) === 36);
+const con = morphMask(sq, 1, 'contract');
+check('contract shrinks square 4x4 -> 2x2', con.data.reduce((s, v) => s + v, 0) === 4);
+
+const rs = resizeMask(sq, 4, 4);
+check('resizeMask 8x8 -> 4x4 keeps 4 fg px', rs.width === 4 && rs.data.reduce((s, v) => s + v, 0) === 4);
+const rs2 = resizeMask(sq, 8, 8);
+check('resizeMask identity returns same values', rs2.data.every((v, i) => v === sq.data[i]));
+
+const a = createMask(4, 4, 0); a.data[0] = 0.8;
+const b = createMask(4, 4, 0); b.data[0] = 0.5;
+check('combine add = max', combineMasks(a, b, 'add').data[0] === 0.8);
+check('combine subtract = a*(1-b)', approx(combineMasks(a, b, 'subtract').data[0], 0.4));
+
+const dab = brushDab(createMask(9, 9), 4, 4, 2, 1, 'add');
+check('brushDab paints centre', dab.data[4 * 9 + 4] === 1);
+check('brushDab leaves corners at 0', dab.data[0] === 0);
+
+const rgba = new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255]);
+applyAlpha(rgba, createMask(2, 1, 0.5));
+check('applyAlpha sets A=128', rgba[3] === 128 && rgba[7] === 128, `A=${rgba[3]},${rgba[7]}`);
+
+// --- metrics (identical masks -> perfect scores) ---
+check('IoU identical = 1', iou(sq, sq) === 1);
+check('Dice identical = 1', dice(sq, sq) === 1);
+check('AlphaMAE identical = 0', alphaMAE(sq, sq) === 0);
+check('BoundaryF identical = 1', boundaryFScore(sq, sq, 1) === 1);
+const other = createMask(8, 8);
+for (let y = 4; y < 8; y += 1) for (let x = 4; x < 8; x += 1) other.data[y * 8 + x] = 1;
+check('IoU disjoint = 0', iou(sq, other) === 0);
+check('Dice disjoint = 0', dice(sq, other) === 0);
+check('AlphaMAE disjoint = 2*16/64', approx(alphaMAE(sq, other), 0.5));
+
+// --- registry / device / planner (no model bytes needed) ---
+check('registry lists 5 models', listModels().length === 5 && MODEL_REGISTRY.length === 5);
+check('no model is installable without pin', MODEL_REGISTRY.every((m) => m.status !== 'installable'));
+const fakeProfile = {
+  backend: 'wasm', webgpu: false, webnn: false, webgl2: false,
+  gpuVendor: '', gpuArchitecture: '', gpuDescription: '', gpuRenderer: '',
+  maxTextureDimension2D: 4096, maxBufferSize: 268435456, maxComputeInvocationsPerWorkgroup: 256,
+  deviceMemoryGB: null, hardwareConcurrency: 4, mobile: true, ios: true,
+  crossOriginIsolated: false, wasmThreads: false, saveData: false, effectiveType: '',
+};
+const prof = resolveDeviceProfile(fakeProfile, 'professional');
+check('iOS WASM professional downgrades to 1024', prof.quality === 'high' && prof.inputResolution === 1024, JSON.stringify(prof.reasons));
+const plan = planSegmentation(4000, 3000, prof);
+check('planner reports input + fits flag', plan.inputSize === 1024 && typeof plan.fits === 'boolean', `peak=${plan.estimatedPeakMB}MB budget=${prof.memoryBudgetMB}MB`);
+
+// --- engine: honest failure when no model installed ---
+const ai = await create({ offline: true, quality: 'low' });
+const img = document.createElement('canvas');
+img.width = 64; img.height = 64;
+const ictx = img.getContext('2d');
+ictx.fillStyle = '#888'; ictx.fillRect(0, 0, 64, 64);
+const res = await ai.removeBackground(img);
+check('removeBackground without model -> success:false', res.success === false);
+check('error code is model-not-installed', res.error?.code === 'model-not-installed', res.error?.code);
+const seg = await ai.segmentObjects(img, { interactive: true, point: { x: 0.5, y: 0.5 } });
+check('segmentObjects -> not-supported (honest)', seg.success === false && seg.error?.code === 'not-supported');
+const models = await ai.getInstalledModels().catch(() => []);
+check('getInstalledModels returns array', Array.isArray(models));
+
+// --- adapter: checkerboard preview renders without AI ---
+const pc = previewCheckerboard(img, sq, { maxSide: 128 });
+check('previewCheckerboard returns canvas', pc.width > 0 && pc.height > 0, `${pc.width}x${pc.height}`);
+
+lines.push(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
+document.getElementById('out').textContent = lines.join('\n');
+document.getElementById('out').className = failures === 0 ? 'pass' : 'fail';
+</script>
+</body>
+</html>
