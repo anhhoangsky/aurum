@@ -37,7 +37,8 @@ engine never fabricates masks.
 | 4 | Instance / interactive segmentation | **Partially Implemented**: `segmentPeople()` via MediaPipe Selfie + connected components + interactive point/box selection over person instances (`selfie.ts`); **not tested in browser** (needs self-hosted tasks-vision fileset); MobileSAM/Acly ONNX export attempted and **rejected as broken** (see below); arbitrary non-person objects still `not-supported` |
 | 5 | Editor adapter + panels + undo/redo | **Implemented** (demo-only): `demo/ai-panel.html/.js` — model install (SHA-256 verify), run BiRefNet/MODNet, per-person instances, checkerboard preview, brush add/erase, feather/expand/invert, panel-local undo/redo (30 steps), original-resolution transparent PNG export. **Not wired into `AurumEditor`** (deliberate: AI mask ≠ core beauty-mask semantics; core untouched). Editor-integrated panel is future work. |
 | 6 | iPhone optimization | **Not yet supported** — needs real-device testing |
-| — | Benchmark dashboard, ground-truth set, metrics formulas | Metrics **implemented** (`metrics.ts`: IoU/Dice/Boundary F/Alpha MAE); dataset + dashboard **not started** |
+| — | Benchmark: harness + 30 DIS_TE1 quantitative results | **Implemented + ran**: `benchmark-dis.py` (IoU/Dice/Boundary F/MAE, timing, 30-run stability). BiRefNet mean IoU 0.77, Dice 0.84, Boundary F 0.56 (tol 2px — **misses 0.95 target**), Alpha MAE 0.0135 (passes 0.04). MODNet on DIS general objects IoU 0.14 (expected: portrait model, out-of-domain). Results in `results/dis-te1-30.{json,md}`. iPhone/browser numbers pending Phase 6. |
+| — | Benchmark dashboard (browser UI) | **Not started** (data + numbers exist; dashboard HTML is future) |
 
 ## Blockers (need owner input)
 

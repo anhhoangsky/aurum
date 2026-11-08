@@ -1,0 +1,519 @@
+{
+ "n": 30,
+ "dataset": "DIS_TE1 (nobg/DIS5K mirror, parquet)",
+ "host": "desktop CPU",
+ "birefnet": {
+  "mean": {
+   "iou": 0.7725,
+   "dice": 0.8388,
+   "boundary_f": 0.5646,
+   "alpha_mae": 0.0135
+  },
+  "median_ms": 2450.4,
+  "p95_ms": 2690.4,
+  "cold_ms": 86288.2,
+  "consec30_median_ms": 2389.6,
+  "consec30_max_ms": 2707.0,
+  "peak_rss_mb": 7351.2,
+  "peak_rss_delta_mb": 3731.9,
+  "rows": [
+   {
+    "image": "1#Accessories#1#Bag#26345192014_f722d1ef0b_o.jpg",
+    "ms": 2699.2,
+    "iou": 0.9726,
+    "dice": 0.9861,
+    "boundary_f": 0.4859,
+    "alpha_mae": 0.0195
+   },
+   {
+    "image": "1#Accessories#3#Eyeglasses#47958244331_9e28e009c1_o.jpg",
+    "ms": 2665.2,
+    "iou": 0.9531,
+    "dice": 0.976,
+    "boundary_f": 0.7747,
+    "alpha_mae": 0.0081
+   },
+   {
+    "image": "1#Accessories#7#Shoe#2541873901_43a3c08fbb_o.jpg",
+    "ms": 2690.4,
+    "iou": 0.6827,
+    "dice": 0.8114,
+    "boundary_f": 0.5102,
+    "alpha_mae": 0.0065
+   },
+   {
+    "image": "10#Frame#5#Rack#14878517473_18c10029a5_o.jpg",
+    "ms": 2697.7,
+    "iou": 0.8879,
+    "dice": 0.9406,
+    "boundary_f": 0.8723,
+    "alpha_mae": 0.0049
+   },
+   {
+    "image": "11#Furniture#11#Handrail#26916885759_17007a82e9_o.jpg",
+    "ms": 2536.6,
+    "iou": 0.8694,
+    "dice": 0.9301,
+    "boundary_f": 0.4108,
+    "alpha_mae": 0.0163
+   },
+   {
+    "image": "11#Furniture#13#Ladder#36394692211_7054fe209b_o.jpg",
+    "ms": 2394.7,
+    "iou": 0.6,
+    "dice": 0.75,
+    "boundary_f": 0.6469,
+    "alpha_mae": 0.0392
+   },
+   {
+    "image": "11#Furniture#17#Table#29442414201_25e94b9676_o.jpg",
+    "ms": 2439.9,
+    "iou": 0.8972,
+    "dice": 0.9458,
+    "boundary_f": 0.5135,
+    "alpha_mae": 0.021
+   },
+   {
+    "image": "11#Furniture#2#Bench#14708047848_a4e4e8911b_o.jpg",
+    "ms": 2497.3,
+    "iou": 0.9024,
+    "dice": 0.9487,
+    "boundary_f": 0.7631,
+    "alpha_mae": 0.0196
+   },
+   {
+    "image": "11#Furniture#4#Chair#IMG_20210512_203857.jpg",
+    "ms": 2478.5,
+    "iou": 0.8746,
+    "dice": 0.9331,
+    "boundary_f": 0.6169,
+    "alpha_mae": 0.0092
+   },
+   {
+    "image": "11#Furniture#9#Easel#6879721377_9bd69cd2d5_o.jpg",
+    "ms": 2559.2,
+    "iou": 0.8658,
+    "dice": 0.9281,
+    "boundary_f": 0.6476,
+    "alpha_mae": 0.0311
+   },
+   {
+    "image": "13#Insect#10#Mosquito#4867892704_b56452c4d7_o.jpg",
+    "ms": 2440.7,
+    "iou": 0.8727,
+    "dice": 0.9321,
+    "boundary_f": 0.6984,
+    "alpha_mae": 0.0104
+   },
+   {
+    "image": "14#Kitchenware#10#WineGlass#2888346876_88032f3c48_o.jpg",
+    "ms": 2589.8,
+    "iou": 0.9301,
+    "dice": 0.9638,
+    "boundary_f": 0.324,
+    "alpha_mae": 0.0176
+   },
+   {
+    "image": "14#Kitchenware#4#Kitchenware#IMG_20210520_205549.jpg",
+    "ms": 2447.7,
+    "iou": 0.9168,
+    "dice": 0.9566,
+    "boundary_f": 0.7239,
+    "alpha_mae": 0.0094
+   },
+   {
+    "image": "16#Music Instrument#4#Piano#22591411174_9940d8b1d7_o.jpg",
+    "ms": 2415.6,
+    "iou": 0.9585,
+    "dice": 0.9788,
+    "boundary_f": 0.7332,
+    "alpha_mae": 0.0168
+   },
+   {
+    "image": "17#Non-motor Vehicle#8#Scooter#41563329055_dc2c5be0a6_o.jpg",
+    "ms": 2522.7,
+    "iou": 0.6871,
+    "dice": 0.8145,
+    "boundary_f": 0.2358,
+    "alpha_mae": 0.0039
+   },
+   {
+    "image": "2#Aircraft#4#Helicopter#6213221512_1f60be8dec_o.jpg",
+    "ms": 2463.9,
+    "iou": 0.9263,
+    "dice": 0.9617,
+    "boundary_f": 0.6627,
+    "alpha_mae": 0.0136
+   },
+   {
+    "image": "20#Sports#16#Golf#2512655836_f2e7d0d898_o.jpg",
+    "ms": 2392.9,
+    "iou": 0.9483,
+    "dice": 0.9735,
+    "boundary_f": 0.7048,
+    "alpha_mae": 0.0036
+   },
+   {
+    "image": "20#Sports#9#RockClimbing#3259611208_4813736731_o.jpg",
+    "ms": 2398.7,
+    "iou": 0.1515,
+    "dice": 0.2632,
+    "boundary_f": 0.2977,
+    "alpha_mae": 0.0067
+   },
+   {
+    "image": "21#Tool#11#Stand#3101700927_dda7998f74_o.jpg",
+    "ms": 2382.7,
+    "iou": 0.9688,
+    "dice": 0.9842,
+    "boundary_f": 0.9863,
+    "alpha_mae": 0.0078
+   },
+   {
+    "image": "21#Tool#15#Tapeline#25201857906_3da1a35a3f_o.jpg",
+    "ms": 2567.7,
+    "iou": 0.6526,
+    "dice": 0.7898,
+    "boundary_f": 0.1802,
+    "alpha_mae": 0.0047
+   },
+   {
+    "image": "21#Tool#17#Tripod#3440100769_33b2e3c0f5_o.jpg",
+    "ms": 2411.2,
+    "iou": 0.6801,
+    "dice": 0.8096,
+    "boundary_f": 0.4681,
+    "alpha_mae": 0.0067
+   },
+   {
+    "image": "21#Tool#5#Hook#2679905340_116168d38a_o.jpg",
+    "ms": 2379.6,
+    "iou": 0.9525,
+    "dice": 0.9757,
+    "boundary_f": 0.6627,
+    "alpha_mae": 0.0102
+   },
+   {
+    "image": "21#Tool#8#Scale#6049493752_9515ebcd68_o.jpg",
+    "ms": 2364.5,
+    "iou": 0.9258,
+    "dice": 0.9614,
+    "boundary_f": 0.3607,
+    "alpha_mae": 0.0158
+   },
+   {
+    "image": "4#Architecture#10#Pavilion#18403524440_235e1eb3be_o.jpg",
+    "ms": 2541.4,
+    "iou": 0.0,
+    "dice": 0.0,
+    "boundary_f": 0.0,
+    "alpha_mae": 0.0256
+   },
+   {
+    "image": "4#Architecture#13#Sculpture#12943126_d113776f89_o.jpg",
+    "ms": 2388.6,
+    "iou": 0.8617,
+    "dice": 0.9257,
+    "boundary_f": 0.8412,
+    "alpha_mae": 0.012
+   },
+   {
+    "image": "4#Architecture#13#Sculpture#9467919878_bd8779943b_o.jpg",
+    "ms": 2453.2,
+    "iou": 0.7977,
+    "dice": 0.8875,
+    "boundary_f": 0.5555,
+    "alpha_mae": 0.0032
+   },
+   {
+    "image": "4#Architecture#4#Fence#6221956496_1fa00e86db_o.jpg",
+    "ms": 2464.4,
+    "iou": 0.9226,
+    "dice": 0.9597,
+    "boundary_f": 0.7807,
+    "alpha_mae": 0.0121
+   },
+   {
+    "image": "6#Automobile#12#Truck#13951454267_28fba7bb77_o.jpg",
+    "ms": 2374.0,
+    "iou": 0.9108,
+    "dice": 0.9533,
+    "boundary_f": 0.7928,
+    "alpha_mae": 0.0263
+   },
+   {
+    "image": "7#Electrical#4#FloorLamp#2377581809_ee4d0256b0_o.jpg",
+    "ms": 2386.2,
+    "iou": 0.37,
+    "dice": 0.5401,
+    "boundary_f": 0.4353,
+    "alpha_mae": 0.0079
+   },
+   {
+    "image": "7#Electrical#6#StreetLamp#4581796536_471792b605_o.jpg",
+    "ms": 2380.4,
+    "iou": 0.2362,
+    "dice": 0.3822,
+    "boundary_f": 0.2516,
+    "alpha_mae": 0.0161
+   }
+  ]
+ },
+ "modnet": {
+  "mean": {
+   "iou": 0.1405,
+   "dice": 0.1958,
+   "boundary_f": 0.1264,
+   "alpha_mae": 0.1116
+  },
+  "median_ms": 450.2,
+  "p95_ms": 600.3,
+  "cold_ms": 23435.8,
+  "consec30_median_ms": 571.6,
+  "consec30_max_ms": 615.0,
+  "peak_rss_mb": 7351.2,
+  "peak_rss_delta_mb": 3731.9,
+  "rows": [
+   {
+    "image": "1#Accessories#1#Bag#26345192014_f722d1ef0b_o.jpg",
+    "ms": 719.6,
+    "iou": 0.3816,
+    "dice": 0.5524,
+    "boundary_f": 0.0778,
+    "alpha_mae": 0.3636
+   },
+   {
+    "image": "1#Accessories#3#Eyeglasses#47958244331_9e28e009c1_o.jpg",
+    "ms": 388.7,
+    "iou": 0.091,
+    "dice": 0.1668,
+    "boundary_f": 0.267,
+    "alpha_mae": 0.2324
+   },
+   {
+    "image": "1#Accessories#7#Shoe#2541873901_43a3c08fbb_o.jpg",
+    "ms": 405.3,
+    "iou": 0.0046,
+    "dice": 0.0091,
+    "boundary_f": 0.026,
+    "alpha_mae": 0.0164
+   },
+   {
+    "image": "10#Frame#5#Rack#14878517473_18c10029a5_o.jpg",
+    "ms": 361.3,
+    "iou": 0.0,
+    "dice": 0.0,
+    "boundary_f": 0.0,
+    "alpha_mae": 0.0371
+   },
+   {
+    "image": "11#Furniture#11#Handrail#26916885759_17007a82e9_o.jpg",
+    "ms": 761.8,
+    "iou": 0.0084,
+    "dice": 0.0167,
+    "boundary_f": 0.0071,
+    "alpha_mae": 0.0918
+   },
+   {
+    "image": "11#Furniture#13#Ladder#36394692211_7054fe209b_o.jpg",
+    "ms": 399.2,
+    "iou": 0.037,
+    "dice": 0.0713,
+    "boundary_f": 0.0613,
+    "alpha_mae": 0.1162
+   },
+   {
+    "image": "11#Furniture#17#Table#29442414201_25e94b9676_o.jpg",
+    "ms": 520.9,
+    "iou": 0.0434,
+    "dice": 0.0833,
+    "boundary_f": 0.0284,
+    "alpha_mae": 0.1549
+   },
+   {
+    "image": "11#Furniture#2#Bench#14708047848_a4e4e8911b_o.jpg",
+    "ms": 443.5,
+    "iou": 0.0124,
+    "dice": 0.0245,
+    "boundary_f": 0.0271,
+    "alpha_mae": 0.256
+   },
+   {
+    "image": "11#Furniture#4#Chair#IMG_20210512_203857.jpg",
+    "ms": 456.9,
+    "iou": 0.0572,
+    "dice": 0.1082,
+    "boundary_f": 0.089,
+    "alpha_mae": 0.0537
+   },
+   {
+    "image": "11#Furniture#9#Easel#6879721377_9bd69cd2d5_o.jpg",
+    "ms": 588.5,
+    "iou": 0.0059,
+    "dice": 0.0118,
+    "boundary_f": 0.0193,
+    "alpha_mae": 0.2039
+   },
+   {
+    "image": "13#Insect#10#Mosquito#4867892704_b56452c4d7_o.jpg",
+    "ms": 600.3,
+    "iou": 0.2845,
+    "dice": 0.443,
+    "boundary_f": 0.1937,
+    "alpha_mae": 0.0396
+   },
+   {
+    "image": "14#Kitchenware#10#WineGlass#2888346876_88032f3c48_o.jpg",
+    "ms": 529.8,
+    "iou": 0.0976,
+    "dice": 0.1779,
+    "boundary_f": 0.1473,
+    "alpha_mae": 0.209
+   },
+   {
+    "image": "14#Kitchenware#4#Kitchenware#IMG_20210520_205549.jpg",
+    "ms": 467.7,
+    "iou": 0.0498,
+    "dice": 0.0949,
+    "boundary_f": 0.1042,
+    "alpha_mae": 0.1774
+   },
+   {
+    "image": "16#Music Instrument#4#Piano#22591411174_9940d8b1d7_o.jpg",
+    "ms": 295.2,
+    "iou": 0.0523,
+    "dice": 0.0993,
+    "boundary_f": 0.0311,
+    "alpha_mae": 0.2974
+   },
+   {
+    "image": "17#Non-motor Vehicle#8#Scooter#41563329055_dc2c5be0a6_o.jpg",
+    "ms": 574.6,
+    "iou": 0.1804,
+    "dice": 0.3056,
+    "boundary_f": 0.1415,
+    "alpha_mae": 0.0267
+   },
+   {
+    "image": "2#Aircraft#4#Helicopter#6213221512_1f60be8dec_o.jpg",
+    "ms": 460.2,
+    "iou": 0.5578,
+    "dice": 0.7161,
+    "boundary_f": 0.2029,
+    "alpha_mae": 0.0661
+   },
+   {
+    "image": "20#Sports#16#Golf#2512655836_f2e7d0d898_o.jpg",
+    "ms": 421.6,
+    "iou": 0.9382,
+    "dice": 0.9681,
+    "boundary_f": 0.7371,
+    "alpha_mae": 0.0041
+   },
+   {
+    "image": "20#Sports#9#RockClimbing#3259611208_4813736731_o.jpg",
+    "ms": 512.3,
+    "iou": 0.0,
+    "dice": 0.0,
+    "boundary_f": 0.0,
+    "alpha_mae": 0.0344
+   },
+   {
+    "image": "21#Tool#11#Stand#3101700927_dda7998f74_o.jpg",
+    "ms": 332.2,
+    "iou": 0.2164,
+    "dice": 0.3558,
+    "boundary_f": 0.4059,
+    "alpha_mae": 0.1368
+   },
+   {
+    "image": "21#Tool#15#Tapeline#25201857906_3da1a35a3f_o.jpg",
+    "ms": 494.3,
+    "iou": 0.0,
+    "dice": 0.0,
+    "boundary_f": 0.0,
+    "alpha_mae": 0.0112
+   },
+   {
+    "image": "21#Tool#17#Tripod#3440100769_33b2e3c0f5_o.jpg",
+    "ms": 389.1,
+    "iou": 0.2395,
+    "dice": 0.3865,
+    "boundary_f": 0.3139,
+    "alpha_mae": 0.0123
+   },
+   {
+    "image": "21#Tool#5#Hook#2679905340_116168d38a_o.jpg",
+    "ms": 427.9,
+    "iou": 0.7047,
+    "dice": 0.8268,
+    "boundary_f": 0.5096,
+    "alpha_mae": 0.0628
+   },
+   {
+    "image": "21#Tool#8#Scale#6049493752_9515ebcd68_o.jpg",
+    "ms": 404.1,
+    "iou": 0.0119,
+    "dice": 0.0235,
+    "boundary_f": 0.0423,
+    "alpha_mae": 0.224
+   },
+   {
+    "image": "4#Architecture#10#Pavilion#18403524440_235e1eb3be_o.jpg",
+    "ms": 567.7,
+    "iou": 0.0,
+    "dice": 0.0,
+    "boundary_f": 0.0,
+    "alpha_mae": 0.0256
+   },
+   {
+    "image": "4#Architecture#13#Sculpture#12943126_d113776f89_o.jpg",
+    "ms": 274.3,
+    "iou": 0.0098,
+    "dice": 0.0194,
+    "boundary_f": 0.0272,
+    "alpha_mae": 0.1068
+   },
+   {
+    "image": "4#Architecture#13#Sculpture#9467919878_bd8779943b_o.jpg",
+    "ms": 481.2,
+    "iou": 0.1418,
+    "dice": 0.2483,
+    "boundary_f": 0.1973,
+    "alpha_mae": 0.011
+   },
+   {
+    "image": "4#Architecture#4#Fence#6221956496_1fa00e86db_o.jpg",
+    "ms": 284.7,
+    "iou": 0.0725,
+    "dice": 0.1353,
+    "boundary_f": 0.1168,
+    "alpha_mae": 0.0975
+   },
+   {
+    "image": "6#Automobile#12#Truck#13951454267_28fba7bb77_o.jpg",
+    "ms": 341.0,
+    "iou": 0.0152,
+    "dice": 0.03,
+    "boundary_f": 0.0192,
+    "alpha_mae": 0.2387
+   },
+   {
+    "image": "7#Electrical#4#FloorLamp#2377581809_ee4d0256b0_o.jpg",
+    "ms": 352.4,
+    "iou": 0.0,
+    "dice": 0.0,
+    "boundary_f": 0.0,
+    "alpha_mae": 0.0187
+   },
+   {
+    "image": "7#Electrical#6#StreetLamp#4581796536_471792b605_o.jpg",
+    "ms": 458.3,
+    "iou": 0.0,
+    "dice": 0.0,
+    "boundary_f": 0.0,
+    "alpha_mae": 0.0208
+   }
+  ]
+ }
+}
