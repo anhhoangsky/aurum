@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#08080a">
+<meta name="color-scheme" content="dark">
+<title>Chỉnh sửa ảnh · aurum</title>
+<link rel="stylesheet" href="./assets/aurum.css?v=1">
+<style>
+  html, body { height: 100%; margin: 0; background: #08080a; overflow: hidden; overscroll-behavior: none; }
+  body { height: 100dvh; }
+  #editor { width: 100%; height: 100%; }
+  .editor-boot { position: fixed; inset: 0; display: grid; place-items: center; color: #8f8c98; font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .editor-boot[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div id="editor"></div>
+<div class="editor-boot" id="editorBoot">Đang mở ảnh…</div>
+<!-- Demo config: point mediaUrl at an image, saveUrl at a backend accepting
+     FormData { csrf, id, mode, file }. ?src=<url> overrides mediaUrl; the
+     floating "Ảnh demo" panel below picks from demo/. -->
+<script type="application/json" id="editor-config">
+{
+  "id": 0,
+  "csrf": "",
+  "saveUrl": "/api/edit",
+  "returnUrl": "./",
+  "viewUrl": "./",
+  "mediaUrl": "./demo/photo-river.jpg",
+  "name": "demo.jpg",
+  "stem": "demo",
+  "uploadName": "demo.jpg",
+  "exportType": "image/jpeg",
+  "heic": false,
+  "width": 1600,
+  "height": 1200,
+  "faces": [],
+  "ai": false,
+  "aiHigh": false,
+  "assetVer": "1",
+  "aiVer": "1",
+  "beautyVer": "1",
+  "landmarks": null,
+  "aiModelVer": "1",
+  "aiHighVer": "1"
+}
+</script>
+<script type="module" src="./assets/demo-shim.js?v=1"></script>
+<script type="module" src="./assets/demo-config.js?v=1"></script>
+<script type="module" src="./assets/demo-panel.js?v=1"></script>
+<script type="module" src="./assets/editor.js?v=1"></script>
+<details id="demo-panel" style="position:fixed;left:12px;top:12px;z-index:90;background:rgba(20,20,24,.92);border:1px solid rgba(255,255,255,.14);border-radius:14px;color:#f4f2ec;font:12px system-ui;padding:8px 10px">
+  <summary style="cursor:pointer;font-weight:650">Ảnh demo</summary>
+  <div id="demo-grid" style="display:grid;grid-template-columns:repeat(3,64px);gap:6px;margin-top:8px"></div>
+</details>
+<script type="module" src="./assets/editor.js?v=1"></script>
+</body>
+</html>
