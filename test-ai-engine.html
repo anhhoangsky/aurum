@@ -60,7 +60,7 @@ check('resizeMask identity returns same values', rs2.data.every((v, i) => v === 
 
 const a = createMask(4, 4, 0); a.data[0] = 0.8;
 const b = createMask(4, 4, 0); b.data[0] = 0.5;
-check('combine add = max', combineMasks(a, b, 'add').data[0] === 0.8);
+check('combine add = max', approx(combineMasks(a, b, 'add').data[0], 0.8));
 check('combine subtract = a*(1-b)', approx(combineMasks(a, b, 'subtract').data[0], 0.4));
 
 const dab = brushDab(createMask(9, 9), 4, 4, 2, 1, 'add');
@@ -76,11 +76,11 @@ check('IoU identical = 1', iou(sq, sq) === 1);
 check('Dice identical = 1', dice(sq, sq) === 1);
 check('AlphaMAE identical = 0', alphaMAE(sq, sq) === 0);
 check('BoundaryF identical = 1', boundaryFScore(sq, sq, 1) === 1);
-const other = createMask(8, 8);
-for (let y = 4; y < 8; y += 1) for (let x = 4; x < 8; x += 1) other.data[y * 8 + x] = 1;
+const other = createMask(8, 8); // truly disjoint: 3x3 at bottom-right
+for (let y = 5; y < 8; y += 1) for (let x = 5; x < 8; x += 1) other.data[y * 8 + x] = 1;
 check('IoU disjoint = 0', iou(sq, other) === 0);
 check('Dice disjoint = 0', dice(sq, other) === 0);
-check('AlphaMAE disjoint = 2*16/64', approx(alphaMAE(sq, other), 0.5));
+check('AlphaMAE disjoint = 25/64', approx(alphaMAE(sq, other), 25 / 64));
 
 // --- registry / device / planner (no model bytes needed) ---
 check('registry lists 9 models', listModels().length === 9 && MODEL_REGISTRY.length === 9);
