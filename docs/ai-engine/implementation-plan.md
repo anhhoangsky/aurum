@@ -35,7 +35,7 @@ engine never fabricates masks.
 | 3 | Person matting (LongPipe XL) | **Blocked**: artifact unverifiable (see model-selection.md §B) |
 | 3 | Person matting (MODNet fallback, pinned + smoke-tested) | **Implemented** (`mattePerson()`, `models.ts` MODNet adapter); portrait matte verified in Python smoke; **not benchmarked vs GT**; browser E2E pending |
 | 4 | Instance / interactive segmentation | **Partially Implemented**: `segmentPeople()` via MediaPipe Selfie + connected components + interactive point/box selection over person instances (`selfie.ts`); **not tested in browser** (needs self-hosted tasks-vision fileset); MobileSAM/Acly ONNX export attempted and **rejected as broken** (see below); arbitrary non-person objects still `not-supported` |
-| 5 | Editor adapter + panels + undo/redo | **Partially**: headless adapter + checkerboard preview implemented; UI panels not started |
+| 5 | Editor adapter + panels + undo/redo | **Implemented** (demo-only): `demo/ai-panel.html/.js` — model install (SHA-256 verify), run BiRefNet/MODNet, per-person instances, checkerboard preview, brush add/erase, feather/expand/invert, panel-local undo/redo (30 steps), original-resolution transparent PNG export. **Not wired into `AurumEditor`** (deliberate: AI mask ≠ core beauty-mask semantics; core untouched). Editor-integrated panel is future work. |
 | 6 | iPhone optimization | **Not yet supported** — needs real-device testing |
 | — | Benchmark dashboard, ground-truth set, metrics formulas | Metrics **implemented** (`metrics.ts`: IoU/Dice/Boundary F/Alpha MAE); dataset + dashboard **not started** |
 
