@@ -32,23 +32,49 @@ export interface ModelDescriptor {
 
 export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
   {
-    id: 'birefnet-lite',
-    version: '0.0.0-unpinned',
-    label: 'BiRefNet Lite (background removal)',
+    id: 'birefnet-lite-512-fp16',
+    version: '1.0.0+962e679',
+    label: 'BiRefNet Lite 512 (background removal, fp16)',
     task: 'background-removal',
-    source: '',
-    sizeBytes: 0,
-    sha256: '',
-    license: 'MIT (upstream BiRefNet; verify per-artifact)',
+    source:
+      'https://huggingface.co/studioludens/birefnet-lite-512/resolve/main/onnx/model_fp16.onnx',
+    sizeBytes: 98_484_532,
+    // Verified locally 2026-11-09: matches the HF LFS oid and the
+    // X-Linked-ETag of the resolved file. Re-verify before trusting.
+    sha256: 'eff9216bb2f9d3f023d9c2b7196845a7485739ab1f231593633e4d2344ffc516',
+    license: 'MIT (studioludens/birefnet-lite-512; upstream ZhengPeng7/BiRefNet_lite)',
     supportedBackends: ['webgpu', 'wasm'],
-    inputResolutions: [512, 768, 1024],
-    quantization: 'unknown',
-    memoryMB: 256,
-    status: 'descriptor-only',
+    inputResolutions: [512],
+    quantization: 'fp16',
+    memoryMB: 384,
+    status: 'installable',
     notes:
-      'BLOCKER: pin the exact ONNX artifact and record official preprocessing ' +
-      '(resize policy, normalization, output head) before Phase 2 inference. ' +
-      'Community 512x512 ONNX mirrors exist; none is pinned here.',
+      'Pinned Phase 2 artifact. Fixed 512x512 input (1024 OOMs in every browser ' +
+      'backend per the model card). Preprocessing from preprocessor_config.json: ' +
+      'resize 512x512, rescale 1/255, ImageNet mean [0.485,0.456,0.406] ' +
+      'std [0.229,0.224,0.225], NCHW, tensor name input_image. Output logits ' +
+      '[1,1,512,512] -> sigmoid -> bilinear to original size. ' +
+      'Python/ORT CPU smoke 2026-11-09: portrait alpha mean 0.508, ~2.5s desktop CPU.',
+  },
+  {
+    id: 'birefnet-lite-512-fp32',
+    version: '1.0.0+962e679',
+    label: 'BiRefNet Lite 512 (background removal, fp32)',
+    task: 'background-removal',
+    source:
+      'https://huggingface.co/studioludens/birefnet-lite-512/resolve/main/onnx/model.onnx',
+    sizeBytes: 191_877_254,
+    sha256: '1cb0fb360dadd15af77c639085d77a9df67db0c64315560c3de005f676345ac2',
+    license: 'MIT (studioludens/birefnet-lite-512; upstream ZhengPeng7/BiRefNet_lite)',
+    supportedBackends: ['webgpu', 'wasm'],
+    inputResolutions: [512],
+    quantization: 'fp32',
+    memoryMB: 512,
+    status: 'installable',
+    notes:
+      'Same weights as the fp16 variant at 2x download size. Python/ORT CPU ' +
+      'smoke matches fp16 to 3 decimals. Prefer fp16 on iPhone; fp32 is the ' +
+      'fallback for backends without fp16 support.',
   },
   {
     id: 'longpipe-xl',

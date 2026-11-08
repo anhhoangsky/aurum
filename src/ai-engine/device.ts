@@ -4,6 +4,13 @@
  * Reuses `probeAIClient()` (src/ai/client.ts) — the same capability source the
  * Real-ESRGAN planner uses — so the AI Engine and the upscale pipeline agree
  * on what the device can do. Never throws.
+ *
+ * NOTE (Phase 2): the pinned BiRefNet Lite artifact has a FIXED 512x512
+ * input (1024x1024 OOMs in every browser backend per the model card). The
+ * `inputResolution` reported here is therefore advisory for that model —
+ * planSegmentation() is always clamped to the adapter's native inputSize
+ * (engine.ts). 768/1024 profiles require a different artifact (Phase 2
+ * blocker, see docs/ai-engine/model-selection.md §A).
  */
 
 import { probeAIClient } from '../ai/client';

@@ -26,11 +26,12 @@ engine never fabricates masks.
 | 0 | Audit, branch, constraints doc | **Implemented** (`docs/ai-engine/repository-audit.md`) |
 | 0 | Model selection report | **Implemented** (researched; LongPipe XL = blocker) |
 | 1 | Device profiles, registry, offline cache + SHA-256, serial queue, memory planner | **Implemented** (`device.ts`, `registry.ts`, `cache.ts`, `queue.ts`, `memory.ts`) — unit-tested in browser page + Node |
-| 1 | Generic ORT runtime (WebGPU → WASM fallback, dispose) | **Implemented** (`runtime.ts`), **not tested** with a real segmentation ONNX |
-| 1 | Small inference test | **Not yet supported** — no model artifact installed; see blocker below |
-| 2 | Background removal (BiRefNet Lite) | **Not yet supported** — descriptor only; preprocessing must be validated against official code |
-| 2 | Mask post-processing (threshold, feather, expand/contract, smooth, resize, composite) | **Implemented** (`mask.ts`, pure TS, tested) |
-| 2 | Original-resolution transparent PNG export | **Implemented** in adapter (`adapter.ts`, untested with AI mask) |
+| 1 | Generic ORT runtime (WebGPU → WASM fallback, dispose) | **Implemented** (`runtime.ts`), **tested** only in the sense of matching the Real-ESRGAN posture; browser inference runs via `test-ai-engine.html` (SKIP until model installed) |
+| 1 | Small inference test | **Implemented** (`docs/ai-engine/benchmark/phase2-smoke.py`: Python ORT CPU — portrait matte verified visually) |
+| 2 | Background removal (BiRefNet Lite 512 fp16, pinned + SHA-256) | **Implemented** (`registry.ts`, `models.ts` adapter, `engine.ts`); preprocessing verified vs `preprocessor_config.json`; **browser inference not yet run end-to-end** (needs `installModel()` in a browser) |
+| 2 | 768/1024 profiles | **Not yet supported** — pinned artifact is fixed-512; 1024 OOMs per model card |
+| 2 | Probability mask → upscale → refine → original-res PNG | **Implemented** (`mask.ts` + `adapter.ts`); Python smoke produced a clean matte |
+| 2 | Hair/edge quality vs ground truth | **Not yet benchmarked** (no ground-truth set yet) |
 | 3 | Person matting (LongPipe XL) | **Blocked**: artifact unverifiable (see model-selection.md §B) |
 | 4 | Instance / interactive segmentation | **Not yet supported** — returns `not-supported` honestly |
 | 5 | Editor adapter + panels + undo/redo | **Partially**: headless adapter + checkerboard preview implemented; UI panels not started |
@@ -41,9 +42,9 @@ engine never fabricates masks.
 
 1. **LongPipe XL artifact**: URL + license + ONNX export. Without it, Phase 3
    cannot start; fallback order is documented in model-selection.md §B.
-2. **BiRefNet Lite artifact + preprocessing**: pin the exact ONNX file(s) and
-   record official resize/normalization/output-head details in `models.ts`
-   before Phase 2 inference code is written.
+2. ~~BiRefNet Lite preprocessing~~ — resolved 2026-11-09 (pinned artifact +
+   `preprocessor_config.json` preprocessing, smoke-tested). Remaining:
+   browser end-to-end inference + 768/1024 artifact.
 3. **Real iPhone** for Phase 6 (Safari WebGPU memory, tab suspension, thermal).
 4. **Benchmark images with ground-truth alpha** (≥30) + licenses.
 

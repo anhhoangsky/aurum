@@ -36,6 +36,11 @@ export interface AurumAICreateOptions extends AurumAIOptions {
   /** ORT runtime URLs supplied by the host (same posture as aurum-ai). */
   runtime?: RuntimeOptions['runtime'];
   onStatus?: (message: string) => void;
+  /**
+   * Preferred background-removal model. Defaults to the pinned fp16 artifact;
+   * the fp32 artifact is used when only it is installed (backend fallback).
+   */
+  modelId?: string;
 }
 
 function failure(
@@ -94,6 +99,7 @@ class AurumAIImpl implements AurumAI {
   private readonly device: DeviceProfile;
   private readonly runtime?: RuntimeOptions['runtime'];
   private readonly onStatus?: (message: string) => void;
+  private readonly modelId: string;
   private readonly queue = new JobQueue();
   private disposed = false;
 
@@ -103,6 +109,7 @@ class AurumAIImpl implements AurumAI {
     this.backend = options.backend ?? device.backend;
     this.runtime = options.runtime;
     this.onStatus = options.onStatus;
+    this.modelId = options.modelId ?? 'birefnet-lite-512-fp16';
   }
 
   /** Exposed for tests/diagnostics; not part of the public AurumAI contract. */
@@ -120,21 +127,36 @@ class AurumAIImpl implements AurumAI {
           message: 'removeBackground needs a non-empty image',
         });
       }
-      const adapter = getModelAdapter('birefnet-lite');
-      if (!adapter || !this.runtime) {
+      // Prefer the requested artifact; fall back to the other pinned
+      // precision when only it is installed.
+      const candidates = [this.modelId, 'birefnet-lite-512-fp16', 'birefnet-lite-512-fp32'];
+      let adapter: ReturnType<typeof getModelAdapter>;
+      let modelId = this.modelId;
+      let bytes: ArrayBuffer | null = null;
+      for (const id of [...new Set(candidates)]) {
+        adapter = getModelAdapter(id);
+        if (!adapter) continue;
+        const found = await loadModelBytes(id);
+        if (found) {
+          modelId = id;
+          bytes = found;
+          break;
+        }
+      }
+      if (!adapter || !bytes) {
         return failure('background-removal', this.quality, {
           code: 'model-not-installed',
-          message: 'BiRefNet Lite is not installed (no adapter/bytes). Install it via installModel() after pinning the artifact.',
+          message:
+            'BiRefNet Lite 512 is not installed. Call installModel("birefnet-lite-512-fp16") once (94 MB, verified SHA-256); inference is offline afterwards.',
         });
       }
-      const bytes = await loadModelBytes('birefnet-lite');
-      if (!bytes) {
+      if (!this.runtime) {
         return failure('background-removal', this.quality, {
-          code: 'model-not-installed',
-          message: 'BiRefNet Lite bytes are not in the offline store',
+          code: 'runtime-unavailable',
+          message: 'No ONNX Runtime URLs were supplied to AurumAI.create()',
         });
       }
-      const descriptor = getModelDescriptor('birefnet-lite');
+      const descriptor = getModelDescriptor(modelId);
       const plan = planSegmentation(width, height, this.device, adapter.inputSize);
       this.onStatus?.(`AI input ${plan.inputSize}×${plan.inputSize} (${this.backend})…`);
       const loaded = await createSession(
@@ -167,7 +189,7 @@ class AurumAIImpl implements AurumAI {
 
         const inferenceTime = performance.now() - started;
         const metadata: AIResultMetadata = {
-          modelId: 'birefnet-lite',
+          modelId,
           modelVersion: descriptor?.version ?? '',
           backend: loaded.backend,
           inputResolution: [plan.inputSize, plan.inputSize],

@@ -23,8 +23,41 @@ preprocessing (resize policy, normalization mean/std, output head) must be
 captured from the official inference code before Phase 2 and recorded in
 `models.ts` — currently marked `preprocessing: 'to-be-validated'` (blocker).
 
-Hair/edge quality, FP16 vs FP32 on Apple GPU, and INT8 availability are all
-**unmeasured** — they are acceptance items for Phase 2, not assumptions.
+---
+
+### Pinned artifact (Phase 2, 2026-11-09)
+
+**`studioludens/birefnet-lite-512`, `onnx/model_fp16.onnx`** — MIT, 512×512
+fixed input, transformers.js/WebGPU-ready export of `ZhengPeng7/BiRefNet_lite`.
+
+| Field | Value |
+|---|---|
+| URL | `https://huggingface.co/studioludens/birefnet-lite-512/resolve/main/onnx/model_fp16.onnx` |
+| Size | 98,484,532 B (~94 MB — under the 100 MB target) |
+| SHA-256 | `eff9216bb2f9d3f023d9c2b7196845a7485739ab1f231593633e4d2344ffc516` (verified locally = HF LFS oid) |
+| Preprocessing | resize 512×512 bilinear → rescale 1/255 → ImageNet norm mean `[0.485,0.456,0.406]` std `[0.229,0.224,0.225]` → NCHW `input_image` (from `preprocessor_config.json`) |
+| Output | logits `[1,1,512,512]` → sigmoid → bilinear to original size |
+| fp32 sibling | `onnx/model.onnx`, 191,877,254 B, SHA-256 `1cb0fb360dadd15af77c639085d77a9df67db0c64315560c3de005f676345ac2` |
+
+**Measured** (`docs/ai-engine/benchmark/phase2-smoke.py`, Python ONNX Runtime
+1.31.1 CPU, desktop):
+- `test-assets/portrait.jpg`: logits range −24.6…21.0, alpha mean **0.508**;
+  visual matte check — person cleanly separated, flags removed, hair intact.
+- `demo/photo-river.jpg` (landscape, no salient object): alpha ≈ 0 everywhere
+  (logits −15.8…−10.3) — correct DIS behaviour, not a failure.
+- fp16 vs fp32 agree to 3 decimals → ship **fp16** (94 MB), fp32 as fallback.
+- Speed: ~2.5–2.8 s per 512×512 image on desktop CPU. iPhone WebGPU timing
+  is **not yet measured** (Phase 6).
+
+**Consequence for profiles**: 768/1024 are **not available** with this
+artifact — 1024×1024 OOMs in every browser backend (per the model card) and
+the graph is fixed at 512. `quality` `low/medium/high` therefore all run the
+512 input; the planner reports the device profile but the adapter's native
+input size wins. A 768/1024 artifact is a future upgrade, not a silent
+resize of a fixed-input graph.
+
+Hair-boundary quality, FP16 on Apple GPU, and INT8 availability remain
+**unmeasured** — acceptance items for the benchmark protocol (§G), not claims.
 
 ## B. Person matting — LongPipe XL (as specified)
 
