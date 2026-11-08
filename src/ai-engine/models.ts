@@ -20,11 +20,13 @@ import type { OrtTensor } from './runtime';
 
 export interface ModelAdapter {
   id: string;
-  /** Native input edge (e.g. 512). Fixed-input models ignore quality profiles. */
+  /** Native input edge (shortest edge for dynamic models; exact edge otherwise). */
   inputSize: number;
-  /** RGBA canvas (square, inputSize) -> NCHW float32 tensor. */
+  /** True: input canvas is square inputSize×inputSize (BiRefNet). False: aspect-preserved (MODNet). */
+  square: boolean;
+  /** RGBA canvas (square or sized by engine) -> NCHW float32 tensor. */
   toTensor(module: { Tensor: new (t: 'float32', d: Float32Array, dims: readonly number[]) => OrtTensor }, input: HTMLCanvasElement): OrtTensor;
-  /** Output tensor -> probability mask at inputSize resolution. */
+  /** Output tensor -> probability mask at canvas resolution. */
   fromTensor(output: OrtTensor, inputSize: number): Mask;
 }
 
@@ -89,10 +91,51 @@ export function sigmoidMask(output: OrtTensor, inputSize: number): Mask {
   return { width: w, height: h, data };
 }
 
+/** Normalize an already-sized RGBA image to NCHW float32 (no resize). */
+export function normalizeNCHW(
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+  mean: readonly number[],
+  std: readonly number[],
+): Float32Array {
+  if (rgba.length !== width * height * 4) {
+    throw new Error(`normalizeNCHW: expected ${width * height * 4} bytes, got ${rgba.length}`);
+  }
+  const out = new Float32Array(3 * width * height);
+  const pixels = width * height;
+  for (let i = 0, j = 0; i < pixels; i += 1, j += 4) {
+    for (let c = 0; c < 3; c += 1) {
+      out[c * pixels + i] = (rgba[j + c]! / 255 - mean[c]!) / std[c]!;
+    }
+  }
+  return out;
+}
+
+export const MODNET_MEAN = [0.5, 0.5, 0.5] as const;
+export const MODNET_STD = [0.5, 0.5, 0.5] as const;
+
+/** Copy a [0,1] alpha output tensor to a mask (no sigmoid — MODNet output). */
+export function alphaMask(output: OrtTensor): Mask {
+  const dims = output.dims;
+  const h = dims.length === 4 ? Number(dims[2]) : 0;
+  const w = dims.length === 4 ? Number(dims[3]) : 0;
+  if (dims.length !== 4 || dims[0] !== 1 || dims[1] !== 1 || !w || !h) {
+    throw new Error(`Unexpected MODNet output shape: ${dims.join('x')}`);
+  }
+  if (output.data.length < w * h) throw new Error('MODNet output is empty');
+  const data = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i += 1) {
+    data[i] = Math.min(1, Math.max(0, output.data[i]!));
+  }
+  return { width: w, height: h, data };
+}
+
 function createBIREFNETAdapter(id: string): ModelAdapter {
   return {
     id,
     inputSize: 512,
+    square: true,
     toTensor(module, input) {
       const width = input.width;
       const height = input.height;
@@ -104,6 +147,26 @@ function createBIREFNETAdapter(id: string): ModelAdapter {
     },
     fromTensor(output, inputSize) {
       return sigmoidMask(output, inputSize);
+    },
+  };
+}
+
+function createMODNetAdapter(id: string): ModelAdapter {
+  return {
+    id,
+    inputSize: 512,
+    square: false,
+    toTensor(module, input) {
+      const width = input.width;
+      const height = input.height;
+      const ctx = input.getContext('2d', { willReadFrequently: true });
+      if (!ctx) throw new Error('2D canvas is unavailable');
+      const rgba = ctx.getImageData(0, 0, width, height).data;
+      const data = normalizeNCHW(rgba, width, height, MODNET_MEAN, MODNET_STD);
+      return new module.Tensor('float32', data, [1, 3, height, width]);
+    },
+    fromTensor(output) {
+      return alphaMask(output);
     },
   };
 }
@@ -126,3 +189,5 @@ export function listModelAdapters(): ModelAdapter[] {
 // their own adapter for the same id before creating the engine.
 registerModelAdapter(createBIREFNETAdapter('birefnet-lite-512-fp16'));
 registerModelAdapter(createBIREFNETAdapter('birefnet-lite-512-fp32'));
+registerModelAdapter(createMODNetAdapter('modnet-fp16'));
+registerModelAdapter(createMODNetAdapter('modnet-fp32'));

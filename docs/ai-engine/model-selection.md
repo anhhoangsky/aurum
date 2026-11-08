@@ -66,6 +66,29 @@ Hair-boundary quality, FP16 on Apple GPU, and INT8 availability remain
 name does not resolve to a public artifact. This is a **documented blocker**,
 not a silent substitution.
 
+### MODNet pinned (Phase 3 fallback, 2026-11-09)
+
+**`Xenova/modnet`** (transformers.js export of MODNet, Apache-2.0), 119k
+downloads. Trimap-free portrait matting, dynamic input.
+
+| Field | Value |
+|---|---|
+| fp16 URL | `https://huggingface.co/Xenova/modnet/resolve/main/onnx/model_fp16.onnx` — 12,984,781 B — SHA-256 `25f165da9bfd30830a575f1f0490f1acd995975cb349bc02f3d79332e1fe5cf6` |
+| fp32 URL | `https://huggingface.co/Xenova/modnet/resolve/main/onnx/model.onnx` — 25,888,640 B — SHA-256 `07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9` |
+| Preprocessing | resize shortest edge 512, size/32, rescale 1/255, mean=std=0.5 (`preprocessor_config.json`); input name `input`, output name `output` |
+| Output | alpha in `[0,1]` directly (no sigmoid) |
+
+**Measured** (Python ORT CPU, `benchmark/phase3-smoke.py`):
+- `portrait.jpg`: alpha mean **0.509** (vs BiRefNet 0.508 — independent
+  cross-check), visual matte very clean; **~315 ms fp32 / ~380 ms fp16** —
+  ~8× faster than BiRefNet. fp16 == fp32.
+- **Out-of-domain warning**: `photo-river.jpg` (mountain, no people) keeps the
+  peak as foreground (alpha mean 0.144) — MODNet is a *portrait* matting
+  model; use BiRefNet for general foreground. `mattePerson()` therefore uses
+  MODNet **only** and never substitutes a segmentation model.
+- Hair/glasses/semi-transparent quality vs ground truth: **not benchmarked yet**
+  (Phase 3 acceptance needs the GT dataset).
+
 Phase 3 plan, in order:
 1. Ask the task owner for the exact LongPipe XL artifact (URL + license).
 2. If unavailable, evaluate in this order, each as a separate registry entry:

@@ -18,7 +18,7 @@ import {
   resizeMask, combineMasks, brushDab, applyAlpha,
   iou, dice, alphaMAE, boundaryFScore,
   MODEL_REGISTRY, listModels, getModelDescriptor, resolveDeviceProfile, planSegmentation,
-  getModelAdapter, rgbaToNCHW, sigmoidMask,
+  getModelAdapter, rgbaToNCHW, sigmoidMask, normalizeNCHW, alphaMask,
   create, previewCheckerboard,
 } from './dist/aurum-ai-engine.esm.js';
 
@@ -82,11 +82,14 @@ check('Dice disjoint = 0', dice(sq, other) === 0);
 check('AlphaMAE disjoint = 2*16/64', approx(alphaMAE(sq, other), 0.5));
 
 // --- registry / device / planner (no model bytes needed) ---
-check('registry lists 6 models', listModels().length === 6 && MODEL_REGISTRY.length === 6);
+check('registry lists 8 models', listModels().length === 8 && MODEL_REGISTRY.length === 8);
 const pinned = getModelDescriptor('birefnet-lite-512-fp16');
 check('BiRefNet fp16 pinned + installable', pinned?.status === 'installable' && pinned.sha256.length === 64, pinned?.sha256.slice(0, 12) + '…');
 check('BiRefNet fp16 size 98,484,532 B', pinned?.sizeBytes === 98484532);
-check('only BiRefNet artifacts are installable', MODEL_REGISTRY.filter((m) => m.status === 'installable').every((m) => m.id.startsWith('birefnet-lite')));
+const mod = getModelDescriptor('modnet-fp16');
+check('MODNet fp16 pinned + installable', mod?.status === 'installable' && mod.sizeBytes === 12984781, mod?.sha256.slice(0, 12) + '…');
+check('MODNet fp32 pinned', getModelDescriptor('modnet-fp32')?.sizeBytes === 25888640);
+check('installable set = BiRefNet + MODNet', MODEL_REGISTRY.filter((m) => m.status === 'installable').length === 4);
 
 // --- preprocessing matches preprocessor_config.json + Python ORT smoke ---
 // 1x1 red pixel -> NCHW normalized: (1-0.485)/0.229=2.249, (0-0.456)/0.224=-2.036, (0-0.406)/0.225=-1.804
@@ -98,6 +101,13 @@ const sig = sigmoidMask({ data: new Float32Array([0, 100, -100, 0, 0, 0, 0, 0, 0
 check('sigmoidMask 0->0.5, 100->1', Math.abs(sig.data[0] - 0.5) < 1e-6 && sig.data[1] === 1, `s0=${sig.data[0]}`);
 const adapter = getModelAdapter('birefnet-lite-512-fp16');
 check('BiRefNet adapter registered, inputSize 512', adapter?.inputSize === 512);
+// MODNet preprocessing: mean=std=0.5 -> 1.0=>1, 0.0=>-1 (no resize)
+const mn = normalizeNCHW(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]);
+check('MODNet normalize 255->1 / 0->-1', mn[0] === 1 && mn[1] === -1 && mn[2] === -1, `${mn[0]},${mn[1]},${mn[2]}`);
+const am = alphaMask({ data: new Float32Array([0.25, 0.75]), dims: [1, 1, 1, 2] });
+check('MODNet alpha passthrough (no sigmoid)', am.width === 2 && am.data[0] === 0.25 && am.data[1] === 0.75);
+const modAdapter = getModelAdapter('modnet-fp16');
+check('MODNet adapter: dynamic, 512 short edge', modAdapter?.square === false && modAdapter.inputSize === 512);
 const fakeProfile = {
   backend: 'wasm', webgpu: false, webnn: false, webgl2: false,
   gpuVendor: '', gpuArchitecture: '', gpuDescription: '', gpuRenderer: '',
@@ -121,6 +131,8 @@ check('removeBackground without model -> success:false', res.success === false);
 check('error code is model-not-installed', res.error?.code === 'model-not-installed', res.error?.code);
 const seg = await ai.segmentObjects(img, { interactive: true, point: { x: 0.5, y: 0.5 } });
 check('segmentObjects -> not-supported (honest)', seg.success === false && seg.error?.code === 'not-supported');
+const matteNoModel = await ai.mattePerson(img);
+check('mattePerson without MODNet -> model-not-installed', matteNoModel.success === false && matteNoModel.error?.code === 'model-not-installed');
 const models = await ai.getInstalledModels().catch(() => []);
 check('getInstalledModels returns array', Array.isArray(models));
 
@@ -135,6 +147,16 @@ if (models.some((m) => m.id === 'birefnet-lite-512-fp16')) {
   check('live inference time < 30s', live.metadata.inferenceTime < 30000, `${live.metadata.inferenceTime.toFixed(0)}ms wall=${dt.toFixed(0)}ms`);
 } else {
   lines.push('SKIP  live inference (model not installed — run installModel("birefnet-lite-512-fp16") first)');
+}
+
+// --- live person matting (MODNet only, guarded) ---
+const matteInstalled = models.some((m) => m.id === 'modnet-fp16' || m.id === 'modnet-fp32');
+if (matteInstalled) {
+  const matte = await ai.mattePerson(img);
+  check('live mattePerson success', matte.success === true && matte.task === 'matting', matte.error?.code);
+  check('live mattePerson model is MODNet', matte.metadata.modelId.startsWith('modnet'), matte.metadata.modelId);
+} else {
+  lines.push('SKIP  live mattePerson (MODNet not installed)');
 }
 
 // --- adapter: checkerboard preview renders without AI ---

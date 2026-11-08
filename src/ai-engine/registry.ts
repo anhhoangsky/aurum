@@ -77,6 +77,45 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
       'fallback for backends without fp16 support.',
   },
   {
+    id: 'modnet-fp32',
+    version: '1.0.0+fa2fa54',
+    label: 'MODNet (person matting, fp32)',
+    task: 'matting',
+    source: 'https://huggingface.co/Xenova/modnet/resolve/main/onnx/model.onnx',
+    sizeBytes: 25_888_640,
+    // Verified locally 2026-11-09: matches the HF LFS oid.
+    sha256: '07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9',
+    license: 'Apache-2.0 (Xenova/modnet; upstream MODNet NACC) — verify per-artifact',
+    supportedBackends: ['webgpu', 'wasm'],
+    inputResolutions: [512],
+    quantization: 'fp32',
+    memoryMB: 192,
+    status: 'installable',
+    notes:
+      'Pinned Phase 3 fallback for LongPipe XL (unverifiable — see model-selection §B). ' +
+      'Trimap-free portrait matting. Input: dynamic HxW, shortest edge 512, size /32 ' +
+      '(preprocessor_config.json: mean=std=0.5, rescale 1/255). Output alpha in [0,1] ' +
+      'directly (no sigmoid). Python/ORT smoke 2026-11-09: portrait alpha 0.509, ~315ms.',
+  },
+  {
+    id: 'modnet-fp16',
+    version: '1.0.0+fa2fa54',
+    label: 'MODNet (person matting, fp16)',
+    task: 'matting',
+    source: 'https://huggingface.co/Xenova/modnet/resolve/main/onnx/model_fp16.onnx',
+    sizeBytes: 12_984_781,
+    sha256: '25f165da9bfd30830a575f1f0490f1acd995975cb349bc02f3d79332e1fe5cf6',
+    license: 'Apache-2.0 (Xenova/modnet; upstream MODNet NACC) — verify per-artifact',
+    supportedBackends: ['webgpu', 'wasm'],
+    inputResolutions: [512],
+    quantization: 'fp16',
+    memoryMB: 128,
+    status: 'installable',
+    notes:
+      'Half the download of fp32; Python/ORT smoke matches fp32 alpha mean exactly. ' +
+      'Prefer fp16 on iPhone; fp32 is the fallback for backends without fp16 support.',
+  },
+  {
     id: 'longpipe-xl',
     version: '0.0.0-unpinned',
     label: 'LongPipe XL (person matting)',

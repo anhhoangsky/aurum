@@ -12,7 +12,7 @@ export { probeDeviceProfile, resolveDeviceProfile } from './device';
 export type { DeviceProfile } from './device';
 export { MODEL_REGISTRY, getModelDescriptor, listModels } from './registry';
 export type { ModelDescriptor } from './registry';
-export { registerModelAdapter, getModelAdapter, listModelAdapters, rgbaToNCHW, sigmoidMask } from './models';
+export { registerModelAdapter, getModelAdapter, listModelAdapters, rgbaToNCHW, sigmoidMask, normalizeNCHW, alphaMask } from './models';
 export type { ModelAdapter } from './models';
 export { JobQueue } from './queue';
 export { planSegmentation } from './memory';

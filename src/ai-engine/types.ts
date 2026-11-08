@@ -108,6 +108,9 @@ export interface AurumAI {
   readonly quality: AIQuality;
   readonly backend: AIBackend;
   removeBackground(source: AISource, options?: RemoveBackgroundOptions): Promise<AIResult>;
+  /** Trimap-free person matting. Uses MODNet only — a segmentation model is
+   *  never presented as matting. Returns model-not-installed when absent. */
+  mattePerson(source: AISource, options?: RemoveBackgroundOptions): Promise<AIResult>;
   replaceBackground(source: AISource, background: AISource, options?: RemoveBackgroundOptions): Promise<AIResult>;
   blurBackground(source: AISource, options?: RemoveBackgroundOptions): Promise<AIResult>;
   segmentPeople(source: AISource, options?: { signal?: AbortSignal }): Promise<AIResult>;

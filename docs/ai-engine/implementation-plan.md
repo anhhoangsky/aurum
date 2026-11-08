@@ -33,6 +33,7 @@ engine never fabricates masks.
 | 2 | Probability mask → upscale → refine → original-res PNG | **Implemented** (`mask.ts` + `adapter.ts`); Python smoke produced a clean matte |
 | 2 | Hair/edge quality vs ground truth | **Not yet benchmarked** (no ground-truth set yet) |
 | 3 | Person matting (LongPipe XL) | **Blocked**: artifact unverifiable (see model-selection.md §B) |
+| 3 | Person matting (MODNet fallback, pinned + smoke-tested) | **Implemented** (`mattePerson()`, `models.ts` MODNet adapter); portrait matte verified in Python smoke; **not benchmarked vs GT**; browser E2E pending |
 | 4 | Instance / interactive segmentation | **Not yet supported** — returns `not-supported` honestly |
 | 5 | Editor adapter + panels + undo/redo | **Partially**: headless adapter + checkerboard preview implemented; UI panels not started |
 | 6 | iPhone optimization | **Not yet supported** — needs real-device testing |

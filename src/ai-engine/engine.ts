@@ -93,6 +93,21 @@ function toSquareCanvas(source: AISource, size: number): HTMLCanvasElement {
   return canvas;
 }
 
+/** Aspect-preserved resize: shortest edge = `shortEdge`, both divisible by 32. */
+function toDynamicCanvas(source: AISource, shortEdge: number): HTMLCanvasElement {
+  const { width, height } = sourceSize(source);
+  const scale = shortEdge / Math.min(width, height);
+  const w = Math.max(32, Math.round((width * scale) / 32) * 32);
+  const h = Math.max(32, Math.round((height * scale) / 32) * 32);
+  const canvas = canvasOf(w, h);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas is unavailable');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, width, height, 0, 0, w, h);
+  return canvas;
+}
+
 class AurumAIImpl implements AurumAI {
   readonly quality: AIQuality;
   readonly backend: 'webgpu' | 'wasm';
@@ -117,21 +132,28 @@ class AurumAIImpl implements AurumAI {
     return planSegmentation(width, height, this.device, resolution);
   }
 
-  async removeBackground(source: AISource, options: RemoveBackgroundOptions = {}): Promise<AIResult> {
+  /** Shared inference path: resolve installed bytes -> session -> mask ->
+   *  upscale to original resolution -> refine. Used by removeBackground
+   *  (BiRefNet) and mattePerson (MODNet); the mask never replaces the
+   *  original-resolution image. */
+  private async runWithModel(
+    task: AIResult['task'],
+    candidates: readonly string[],
+    source: AISource,
+    options: RemoveBackgroundOptions,
+    installHint: string,
+  ): Promise<AIResult> {
     const run = async (signal: AbortSignal): Promise<AIResult> => {
       const started = performance.now();
       const { width, height } = sourceSize(source);
       if (!width || !height) {
-        return failure('background-removal', this.quality, {
+        return failure(task, this.quality, {
           code: 'invalid-input',
-          message: 'removeBackground needs a non-empty image',
+          message: 'AI needs a non-empty image',
         });
       }
-      // Prefer the requested artifact; fall back to the other pinned
-      // precision when only it is installed.
-      const candidates = [this.modelId, 'birefnet-lite-512-fp16', 'birefnet-lite-512-fp32'];
       let adapter: ReturnType<typeof getModelAdapter>;
-      let modelId = this.modelId;
+      let modelId = candidates[0]!;
       let bytes: ArrayBuffer | null = null;
       for (const id of [...new Set(candidates)]) {
         adapter = getModelAdapter(id);
@@ -144,28 +166,29 @@ class AurumAIImpl implements AurumAI {
         }
       }
       if (!adapter || !bytes) {
-        return failure('background-removal', this.quality, {
+        return failure(task, this.quality, {
           code: 'model-not-installed',
-          message:
-            'BiRefNet Lite 512 is not installed. Call installModel("birefnet-lite-512-fp16") once (94 MB, verified SHA-256); inference is offline afterwards.',
+          message: installHint,
         });
       }
       if (!this.runtime) {
-        return failure('background-removal', this.quality, {
+        return failure(task, this.quality, {
           code: 'runtime-unavailable',
           message: 'No ONNX Runtime URLs were supplied to AurumAI.create()',
         });
       }
       const descriptor = getModelDescriptor(modelId);
       const plan = planSegmentation(width, height, this.device, adapter.inputSize);
-      this.onStatus?.(`AI input ${plan.inputSize}×${plan.inputSize} (${this.backend})…`);
+      this.onStatus?.(`AI input ${plan.inputSize}px (${this.backend})…`);
       const loaded = await createSession(
         bytes,
         { runtime: this.runtime, backend: this.backend, onStatus: this.onStatus },
         signal,
       );
       try {
-        const inputCanvas = toSquareCanvas(source, adapter.inputSize);
+        const inputCanvas = adapter.square
+          ? toSquareCanvas(source, adapter.inputSize)
+          : toDynamicCanvas(source, adapter.inputSize);
         const tensor = adapter.toTensor(loaded.module, inputCanvas);
         options.onProgress?.('inference');
         const output = await loaded.session.run({ [loaded.session.inputNames[0]!]: tensor });
@@ -181,9 +204,8 @@ class AurumAIImpl implements AurumAI {
         }
         if (options.feather) mask = featherMask(mask, options.feather);
         if (options.refineEdges || options.preserveHair) {
-          // Placeholder refinement hook: light feather keeps hair detail from
-          // being destroyed by hard thresholding. Real edge-aware matting
-          // arrives with a validated matting model (Phase 3).
+          // Light feather keeps hair detail from being destroyed by hard
+          // thresholding. Manual brush refinement (Phase 5) builds on this.
           mask = featherMask(mask, 1);
         }
 
@@ -192,12 +214,12 @@ class AurumAIImpl implements AurumAI {
           modelId,
           modelVersion: descriptor?.version ?? '',
           backend: loaded.backend,
-          inputResolution: [plan.inputSize, plan.inputSize],
+          inputResolution: [inputCanvas.width, inputCanvas.height],
           inferenceTime,
           quality: this.quality,
           installedModel: true,
         };
-        return { success: true, task: 'background-removal', masks: [mask], instances: [], metadata };
+        return { success: true, task, masks: [mask], instances: [], metadata };
       } finally {
         await loaded.dispose();
       }
@@ -206,10 +228,33 @@ class AurumAIImpl implements AurumAI {
       return await this.queue.enqueue({ run, signal: options.signal });
     } catch (error) {
       if ((error as Error)?.name === 'AbortError') {
-        return failure('background-removal', this.quality, { code: 'aborted', message: 'Aborted' });
+        return failure(task, this.quality, { code: 'aborted', message: 'Aborted' });
       }
       throw error;
     }
+  }
+
+  async removeBackground(source: AISource, options: RemoveBackgroundOptions = {}): Promise<AIResult> {
+    const first = this.modelId.startsWith('birefnet') ? this.modelId : undefined;
+    return this.runWithModel(
+      'background-removal',
+      [first, 'birefnet-lite-512-fp16', 'birefnet-lite-512-fp32'].filter((v): v is string => Boolean(v)),
+      source,
+      options,
+      'BiRefNet Lite 512 is not installed. Call installModel("birefnet-lite-512-fp16") once (94 MB, verified SHA-256); inference is offline afterwards.',
+    );
+  }
+
+  async mattePerson(source: AISource, options: RemoveBackgroundOptions = {}): Promise<AIResult> {
+    // MODNet ONLY. BiRefNet is a dichotomous segmentation model, not a
+    // trimap-free matting model — substituting it here would be a false claim.
+    return this.runWithModel(
+      'matting',
+      ['modnet-fp16', 'modnet-fp32'],
+      source,
+      options,
+      'MODNet is not installed. Call installModel("modnet-fp16") once (13 MB, verified SHA-256); person matting is offline afterwards.',
+    );
   }
 
   async replaceBackground(source: AISource, background: AISource, options: RemoveBackgroundOptions = {}): Promise<AIResult> {
