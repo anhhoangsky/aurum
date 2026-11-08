@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aurum AI Engine — smoke tests</title>
+<style>
+  body { margin: 0; padding: 16px; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; background: #101014; color: #ece9e2; }
+  pre { white-space: pre-wrap; }
+  .pass { color: #7dd87d; } .fail { color: #ff7a7a; }
+</style>
+</head>
+<body>
+<pre id="out">running…</pre>
+<script type="module">
+import {
+  createMask, invertMask, thresholdMask, featherMask, morphMask,
+  resizeMask, combineMasks, brushDab, applyAlpha,
+  iou, dice, alphaMAE, boundaryFScore,
+  MODEL_REGISTRY, listModels, getModelDescriptor, resolveDeviceProfile, planSegmentation,
+  getModelAdapter, rgbaToNCHW, sigmoidMask, normalizeNCHW, alphaMask,
+  connectedComponents,
+  create, previewCheckerboard,
+} from './dist/aurum-ai-engine.esm.js';
+
+const lines = [];
+let failures = 0;
+function check(name, cond, detail = '') {
+  lines.push(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  ' + detail : ''}`);
+  if (!cond) failures += 1;
+}
+function approx(a, b, eps = 0.02) { return Math.abs(a - b) <= eps; }
+
+// --- mask primitives (synthetic 8x8 square) ---
+const sq = createMask(8, 8);
+for (let y = 2; y < 6; y += 1) for (let x = 2; x < 6; x += 1) sq.data[y * 8 + x] = 1;
+check('createMask square has 16 foreground px', sq.data.reduce((s, v) => s + v, 0) === 16);
+
+const inv = invertMask(sq);
+check('invertMask flips square to 48', inv.data.reduce((s, v) => s + v, 0) === 48);
+
+const soft = createMask(4, 4, 0.4);
+check('thresholdMask 0.5 -> all zero', thresholdMask(soft, 0.5).data.every((v) => v === 0));
+check('thresholdMask 0.3 -> all one', thresholdMask(soft, 0.3).data.every((v) => v === 1));
+
+const fea = featherMask(sq, 1);
+const edgeVal = fea.data[2 * 8 + 2];
+check('featherMask softens edges (0<edge<1)', edgeVal > 0 && edgeVal < 1, `edge=${edgeVal.toFixed(3)}`);
+check('featherMask preserves interior', fea.data[4 * 8 + 4] === 1);
+
+const exp = morphMask(sq, 1, 'expand');
+check('expand grows square 4x4 -> 6x6', exp.data.reduce((s, v) => s + v, 0) === 36);
+const con = morphMask(sq, 1, 'contract');
+check('contract shrinks square 4x4 -> 2x2', con.data.reduce((s, v) => s + v, 0) === 4);
+
+const rs = resizeMask(sq, 4, 4);
+check('resizeMask 8x8 -> 4x4 keeps 4 fg px', rs.width === 4 && rs.data.reduce((s, v) => s + v, 0) === 4);
+const rs2 = resizeMask(sq, 8, 8);
+check('resizeMask identity returns same values', rs2.data.every((v, i) => v === sq.data[i]));
+
+const a = createMask(4, 4, 0); a.data[0] = 0.8;
+const b = createMask(4, 4, 0); b.data[0] = 0.5;
+check('combine add = max', combineMasks(a, b, 'add').data[0] === 0.8);
+check('combine subtract = a*(1-b)', approx(combineMasks(a, b, 'subtract').data[0], 0.4));
+
+const dab = brushDab(createMask(9, 9), 4, 4, 2, 1, 'add');
+check('brushDab paints centre', dab.data[4 * 9 + 4] === 1);
+check('brushDab leaves corners at 0', dab.data[0] === 0);
+
+const rgba = new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255]);
+applyAlpha(rgba, createMask(2, 1, 0.5));
+check('applyAlpha sets A=128', rgba[3] === 128 && rgba[7] === 128, `A=${rgba[3]},${rgba[7]}`);
+
+// --- metrics (identical masks -> perfect scores) ---
+check('IoU identical = 1', iou(sq, sq) === 1);
+check('Dice identical = 1', dice(sq, sq) === 1);
+check('AlphaMAE identical = 0', alphaMAE(sq, sq) === 0);
+check('BoundaryF identical = 1', boundaryFScore(sq, sq, 1) === 1);
+const other = createMask(8, 8);
+for (let y = 4; y < 8; y += 1) for (let x = 4; x < 8; x += 1) other.data[y * 8 + x] = 1;
+check('IoU disjoint = 0', iou(sq, other) === 0);
+check('Dice disjoint = 0', dice(sq, other) === 0);
+check('AlphaMAE disjoint = 2*16/64', approx(alphaMAE(sq, other), 0.5));
+
+// --- registry / device / planner (no model bytes needed) ---
+check('registry lists 9 models', listModels().length === 9 && MODEL_REGISTRY.length === 9);
+const pinned = getModelDescriptor('birefnet-lite-512-fp16');
+check('BiRefNet fp16 pinned + installable', pinned?.status === 'installable' && pinned.sha256.length === 64, pinned?.sha256.slice(0, 12) + '…');
+check('BiRefNet fp16 size 98,484,532 B', pinned?.sizeBytes === 98484532);
+const mod = getModelDescriptor('modnet-fp16');
+check('MODNet fp16 pinned + installable', mod?.status === 'installable' && mod.sizeBytes === 12984781, mod?.sha256.slice(0, 12) + '…');
+check('MODNet fp32 pinned', getModelDescriptor('modnet-fp32')?.sizeBytes === 25888640);
+check('installable set = BiRefNet + MODNet + selfie', MODEL_REGISTRY.filter((m) => m.status === 'installable').length === 5);
+check('selfie segmenter pinned 249,537 B', getModelDescriptor('mediapipe-selfie-segmenter')?.sizeBytes === 249537);
+
+// --- connected components (instance splitting) ---
+const two = createMask(16, 8);
+for (let y = 1; y < 4; y += 1) for (let x = 1; x < 5; x += 1) two.data[y * 16 + x] = 0.9;
+for (let y = 4; y < 7; y += 1) for (let x = 10; x < 14; x += 1) two.data[y * 16 + x] = 0.8;
+for (let i = 0; i < 3; i += 1) two.data[7 * 16 + i] = 0.9; // noise < minArea (far corner)
+const comps = connectedComponents(two, 0.5, 8);
+check('CC finds 2 instances', comps.length === 2, `got ${comps.length}`);
+check('CC areas correct (12, 12)', comps[0]?.area === 12 && comps[1]?.area === 12, `${comps[0]?.area},${comps[1]?.area}`);
+check('CC boxes correct', comps[0]?.box.x === 1 && comps[0]?.box.y === 1 && comps[1]?.box.x === 10);
+check('CC confidence = mean prob', Math.abs((comps[0]?.confidence ?? 0) - 0.9) < 0.01);
+check('CC masks disjoint', comps[0].mask.data.every((v, i) => v === 0 || comps[1].mask.data[i] === 0));
+
+// --- preprocessing matches preprocessor_config.json + Python ORT smoke ---
+// 1x1 red pixel -> NCHW normalized: (1-0.485)/0.229=2.249, (0-0.456)/0.224=-2.036, (0-0.406)/0.225=-1.804
+const nchw = rgbaToNCHW(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1, 1);
+check('rgbaToNCHW red pixel = ImageNet norm', Math.abs(nchw[0] - 2.2489) < 0.001 && Math.abs(nchw[0] - 2.25) < 0.01, nchw[0].toFixed(3));
+check('rgbaToNCHW G channel', Math.abs(nchw[1] - -2.0357) < 0.001, nchw[1].toFixed(3));
+check('rgbaToNCHW B channel', Math.abs(nchw[2] - -1.8044) < 0.001, nchw[2].toFixed(3));
+const sig = sigmoidMask({ data: new Float32Array([0, 100, -100, 0, 0, 0, 0, 0, 0]), dims: [1, 1, 3, 3] }, 3);
+check('sigmoidMask 0->0.5, 100->1', Math.abs(sig.data[0] - 0.5) < 1e-6 && sig.data[1] === 1, `s0=${sig.data[0]}`);
+const adapter = getModelAdapter('birefnet-lite-512-fp16');
+check('BiRefNet adapter registered, inputSize 512', adapter?.inputSize === 512);
+// MODNet preprocessing: mean=std=0.5 -> 1.0=>1, 0.0=>-1 (no resize)
+const mn = normalizeNCHW(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]);
+check('MODNet normalize 255->1 / 0->-1', mn[0] === 1 && mn[1] === -1 && mn[2] === -1, `${mn[0]},${mn[1]},${mn[2]}`);
+const am = alphaMask({ data: new Float32Array([0.25, 0.75]), dims: [1, 1, 1, 2] });
+check('MODNet alpha passthrough (no sigmoid)', am.width === 2 && am.data[0] === 0.25 && am.data[1] === 0.75);
+const modAdapter = getModelAdapter('modnet-fp16');
+check('MODNet adapter: dynamic, 512 short edge', modAdapter?.square === false && modAdapter.inputSize === 512);
+const fakeProfile = {
+  backend: 'wasm', webgpu: false, webnn: false, webgl2: false,
+  gpuVendor: '', gpuArchitecture: '', gpuDescription: '', gpuRenderer: '',
+  maxTextureDimension2D: 4096, maxBufferSize: 268435456, maxComputeInvocationsPerWorkgroup: 256,
+  deviceMemoryGB: null, hardwareConcurrency: 4, mobile: true, ios: true,
+  crossOriginIsolated: false, wasmThreads: false, saveData: false, effectiveType: '',
+};
+const prof = resolveDeviceProfile(fakeProfile, 'professional');
+check('iOS WASM professional downgrades to 1024', prof.quality === 'high' && prof.inputResolution === 1024, JSON.stringify(prof.reasons));
+const plan = planSegmentation(4000, 3000, prof);
+check('planner reports input + fits flag', plan.inputSize === 1024 && typeof plan.fits === 'boolean', `peak=${plan.estimatedPeakMB}MB budget=${prof.memoryBudgetMB}MB`);
+
+// --- engine: honest failure when no model installed ---
+const ai = await create({ offline: true, quality: 'low' });
+const img = document.createElement('canvas');
+img.width = 64; img.height = 64;
+const ictx = img.getContext('2d');
+ictx.fillStyle = '#888'; ictx.fillRect(0, 0, 64, 64);
+const res = await ai.removeBackground(img);
+check('removeBackground without model -> success:false', res.success === false);
+check('error code is model-not-installed', res.error?.code === 'model-not-installed', res.error?.code);
+const seg = await ai.segmentObjects(img, { interactive: true, point: { x: 0.5, y: 0.5 } });
+check('segmentObjects -> not-supported (honest)', seg.success === false && seg.error?.code === 'not-supported');
+const matteNoModel = await ai.mattePerson(img);
+check('mattePerson without MODNet -> model-not-installed', matteNoModel.success === false && matteNoModel.error?.code === 'model-not-installed');
+const peopleNoConfig = await ai.segmentPeople(img);
+check('segmentPeople without mediapipe config -> not-supported', peopleNoConfig.success === false && peopleNoConfig.error?.code === 'not-supported');
+const models = await ai.getInstalledModels().catch(() => []);
+check('getInstalledModels returns array', Array.isArray(models));
+
+// --- live inference: only when the pinned model is installed ---
+if (models.some((m) => m.id === 'birefnet-lite-512-fp16')) {
+  const t0 = performance.now();
+  const live = await ai.removeBackground(img, { resolution: 'adaptive' });
+  const dt = performance.now() - t0;
+  check('live removeBackground success', live.success === true, live.error?.code);
+  check('live metadata model/backend', live.metadata.modelId === 'birefnet-lite-512-fp16', `${live.metadata.modelId}/${live.metadata.backend}`);
+  check('live mask size = source', live.masks[0]?.width === 64 && live.masks[0]?.height === 64);
+  check('live inference time < 30s', live.metadata.inferenceTime < 30000, `${live.metadata.inferenceTime.toFixed(0)}ms wall=${dt.toFixed(0)}ms`);
+} else {
+  lines.push('SKIP  live inference (model not installed — run installModel("birefnet-lite-512-fp16") first)');
+}
+
+// --- live person matting (MODNet only, guarded) ---
+const matteInstalled = models.some((m) => m.id === 'modnet-fp16' || m.id === 'modnet-fp32');
+if (matteInstalled) {
+  const matte = await ai.mattePerson(img);
+  check('live mattePerson success', matte.success === true && matte.task === 'matting', matte.error?.code);
+  check('live mattePerson model is MODNet', matte.metadata.modelId.startsWith('modnet'), matte.metadata.modelId);
+} else {
+  lines.push('SKIP  live mattePerson (MODNet not installed)');
+}
+
+// --- adapter: checkerboard preview renders without AI ---
+const pc = previewCheckerboard(img, sq, { maxSide: 128 });
+check('previewCheckerboard returns canvas', pc.width > 0 && pc.height > 0, `${pc.width}x${pc.height}`);
+
+lines.push(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
+document.getElementById('out').textContent = lines.join('\n');
+document.getElementById('out').className = failures === 0 ? 'pass' : 'fail';
+</script>
+</body>
+</html>

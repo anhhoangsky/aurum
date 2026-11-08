@@ -52,6 +52,16 @@ await Promise.all([
   }),
   build({
     ...shared,
+    entryPoints: ['src/ai-engine/index.ts'],
+    banner: {
+      js: `/*! ${pkg.name} AI Engine v${pkg.version} | independent segmentation subsystem | offline-first, loads ORT at runtime */`,
+    },
+    format: 'esm',
+    minify: true,
+    outfile: 'dist/aurum-ai-engine.esm.js',
+  }),
+  build({
+    ...shared,
     entryPoints: ['src/beauty/index.ts'],
     banner: {
       js: `/*! ${pkg.name} Beauty v${pkg.version} | optional CPU skin/feature mask | ${pkg.license} */`,
@@ -121,6 +131,7 @@ const files = [
   'dist/aurum.cjs',
   'dist/aurum.min.js',
   'dist/aurum-ai.esm.js',
+  'dist/aurum-ai-engine.esm.js',
   'dist/aurum-beauty.esm.js',
   'dist/aurum-landmarks.esm.js',
   'dist/aurum.css',

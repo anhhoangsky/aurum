@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#08080a">
+<title>Aurum AI Engine — Panel</title>
+<style>
+  :root { --gold: #e8c07a; --bg: #08080a; --panel: #16161b; --line: rgba(255,255,255,.12); --text: #f2efe8; --muted: #9a97a3; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; max-width: 1180px; margin: 0 auto; padding: 16px; }
+  @media (max-width: 820px) { .wrap { grid-template-columns: 1fr; } }
+  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 12px; min-height: 320px; display: grid; place-items: center; }
+  canvas#preview { max-width: 100%; max-height: 70vh; border-radius: 8px; touch-action: none; }
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 12px; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; letter-spacing: .02em; color: var(--gold); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button { background: #23232b; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: rgba(232,192,122,.5); }
+  button.primary { background: var(--gold); border-color: var(--gold); color: #161310; font-weight: 650; }
+  button:disabled { opacity: .45; cursor: default; }
+  button[aria-pressed="true"] { outline: 2px solid var(--gold); }
+  label { color: var(--muted); font-size: 12px; display: block; margin: 8px 0 2px; }
+  input[type="range"] { width: 100%; }
+  select, input[type="file"] { width: 100%; background: #1c1c22; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 7px 8px; font-size: 13px; }
+  #log { font: 11.5px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--muted); white-space: pre-wrap; max-height: 130px; overflow: auto; }
+  .meta { font-size: 12px; color: var(--muted); }
+  .inst { display: flex; gap: 6px; flex-wrap: wrap; }
+  progress { width: 100%; height: 8px; }
+  .note { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage"><canvas id="preview" width="640" height="640"></canvas></div>
+  <div class="side">
+    <div class="card">
+      <h2>Ảnh nguồn</h2>
+      <div class="row">
+        <button type="button" data-sample="../test-assets/portrait.jpg">Chân dung</button>
+        <button type="button" data-sample="../demo/photo-pug.jpg">Ảnh động vật</button>
+      </div>
+      <label for="file">Hoặc chọn ảnh của bạn (chỉ xử lý trên máy)</label>
+      <input type="file" id="file" accept="image/*">
+    </div>
+    <div class="card">
+      <h2>Model</h2>
+      <label for="model">Chọn tác vụ</label>
+      <select id="model">
+        <option value="birefnet-lite-512-fp16">Xoá nền — BiRefNet Lite 512 fp16 (94 MB)</option>
+        <option value="modnet-fp16">Tách người (matting) — MODNet fp16 (13 MB)</option>
+      </select>
+      <p class="note" id="model-status">Đang kiểm tra bản đã cài…</p>
+      <div class="row">
+        <button type="button" id="install">Cài đặt model (tải 1 lần, kiểm tra SHA-256)</button>
+      </div>
+      <progress id="install-progress" max="100" value="0" hidden></progress>
+      <p class="note">Sau khi cài, inference **không dùng mạng**. Model là OLS (ONNX), chạy bằng ORT trong trình duyệt.</p>
+    </div>
+    <div class="card">
+      <h2>Chạy AI</h2>
+      <div class="row">
+        <button type="button" id="run" class="primary">Chạy</button>
+        <button type="button" id="abort">Huỷ</button>
+        <button type="button" id="people">Tìm từng người</button>
+      </div>
+      <p class="meta" id="run-meta"></p>
+    </div>
+    <div class="card">
+      <h2>Chỉnh mask</h2>
+      <div class="row">
+        <button type="button" id="tool-add" aria-pressed="true">Thêm (cọ)</button>
+        <button type="button" id="tool-erase" aria-pressed="false">Xoá (tẩy)</button>
+      </div>
+      <label for="brush">Cỡ cọ <span id="brush-val">48</span> px</label>
+      <input type="range" id="brush" min="8" max="160" value="48">
+      <label for="feather">Mềm cạnh (feather) <span id="feather-val">0</span></label>
+      <input type="range" id="feather" min="0" max="8" step="1" value="0">
+      <label for="expand">Mở/rút mask <span id="expand-val">0</span></label>
+      <input type="range" id="expand" min="-8" max="8" step="1" value="0">
+      <div class="row" style="margin-top:8px">
+        <button type="button" id="invert">Đảo mask</button>
+        <button type="button" id="undo">Hoàn tác</button>
+        <button type="button" id="redo">Làm lại</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button type="button" id="check-toggle" aria-pressed="true">Nền caro: bật</button>
+        <button type="button" id="export">Xuất PNG trong suốt</button>
+      </div>
+      <div class="inst" id="instances" style="margin-top:8px"></div>
+    </div>
+    <div class="card"><h2>Nhật ký</h2><div id="log">Sẵn sàng.</div></div>
+    <p class="note">Panel AI độc lập: không sửa WebGL Core của editor. Mask được chỉnh độc lập với ảnh gốc; bản xuất là PNG trong suốt ở độ phân giải gốc.</p>
+  </div>
+</div>
+<script type="module" src="./ai-panel.js"></script>
+</body>
+</html>
