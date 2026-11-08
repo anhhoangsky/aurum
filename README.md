@@ -38,9 +38,9 @@ The demo harness installs the Trusted Types shims
 (`assets/demo-shim.js`) separately so the engine works under a
 `require-trusted-types-for 'script'` CSP.
 
-## Screenshots
+## Demo
 
-![aurum editor — liquid glass chrome and ruler sliders](demo/screenshot-aurum-editor.png)
+![[aurum editor — liquid glass](https://anhhoangsky.github.io/aurum/editor)]
 
 ## Configuration contract
 
