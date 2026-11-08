@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum landmark anchor test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .hosts { display: flex; gap: 16px; flex-wrap: wrap; }
+  .host { width: 512px; height: 512px; position: relative; flex: 0 0 auto; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="hosts">
+  <div id="refined" class="host"></div>
+  <div id="fallback" class="host"></div>
+</div>
+<pre id="log">Running…</pre>
+<script type="module">
+import { createCore } from './dist/aurum.esm.js?v=20261102d';
+import { anchorsFromLandmarks } from './dist/aurum-landmarks.esm.js?v=20261102d';
+
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+const FACE = { x: 0.2, y: 0.15, w: 0.6, h: 0.7 };
+const EYE_L = { u: 0.375, v: 0.40 };
+const EYE_R = { u: 0.625, v: 0.40 };
+
+// Build a synthetic 478-point mesh with known eye/nose/mouth positions. The
+// five extreme points define a deterministic bounding box for the anchor math.
+function syntheticMesh() {
+  const points = [];
+  for (let i = 0; i < 478; i += 1) {
+    const angle = (i / 478) * Math.PI * 2;
+    points.push({
+      x: 0.5 + Math.cos(angle) * 0.20,
+      y: 0.5 + Math.sin(angle) * 0.24,
+      z: 0,
+    });
+  }
+  const set = (index, x, y) => { points[index] = { x, y, z: 0 }; };
+  // Face extremes.
+  set(10, 0.50, 0.16);
+  set(152, 0.50, 0.84);
+  set(234, 0.21, 0.50);
+  set(454, 0.79, 0.50);
+  // Eyes: corners, upper and lower lids.
+  set(33, 0.32, 0.40);
+  set(133, 0.43, 0.40);
+  set(159, 0.375, 0.38);
+  set(145, 0.375, 0.42);
+  set(362, 0.57, 0.40);
+  set(263, 0.68, 0.40);
+  set(386, 0.625, 0.38);
+  set(374, 0.625, 0.42);
+  // Nose bridge/tip and nostrils.
+  set(6, 0.50, 0.42);
+  set(1, 0.50, 0.55);
+  set(98, 0.46, 0.53);
+  set(327, 0.54, 0.53);
+  // Mouth corners, top and bottom.
+  set(61, 0.42, 0.67);
+  set(291, 0.58, 0.67);
+  set(13, 0.50, 0.65);
+  set(14, 0.50, 0.69);
+  return points;
+}
+
+function faceCanvas(width = 512, height = 512) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#20303a';
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = '#7a6a32';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= width; i += 16) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i, height);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i);
+    ctx.lineTo(width, i);
+    ctx.stroke();
+  }
+
+  const x = FACE.x * width;
+  const y = FACE.y * height;
+  const w = FACE.w * width;
+  const h = FACE.h * height;
+
+  ctx.fillStyle = '#c98f6b';
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h / 2, w * 0.44, h * 0.46, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#1a1114';
+  for (const eye of [EYE_L, EYE_R]) {
+    ctx.beginPath();
+    ctx.arc(eye.u * width, eye.v * height, 14, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(0.5 * width, 0.55 * height, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(0.5 * width, 0.67 * height, 30, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  return canvas;
+}
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+
+const settle = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 4) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = a[i + k] - b[i + k];
+      sum += d * d;
+      max = Math.max(max, Math.abs(d));
+    }
+  }
+  const mse = sum / (n * 0.75);
+  return { mse, max, psnr: mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse) };
+}
+
+function roiDiff(a, b, u0, v0, u1, v1) {
+  const x0 = Math.round(u0 * a.width);
+  const x1 = Math.round(u1 * a.width);
+  const y0 = Math.round(v0 * a.height);
+  const y1 = Math.round(v1 * a.height);
+  let sum = 0;
+  let count = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const at = (y * a.width + x) * 4;
+      sum += (Math.abs(a.data[at] - b.data[at]) +
+        Math.abs(a.data[at + 1] - b.data[at + 1]) +
+        Math.abs(a.data[at + 2] - b.data[at + 2])) / 3;
+      count += 1;
+    }
+  }
+  return sum / Math.max(1, count);
+}
+
+function captureGL(core) {
+  core.setPreviewQuality('high');
+  core.renderNow();
+  const gl = core.canvas.getContext('webgl');
+  if (!gl) return null;
+  const width = gl.drawingBufferWidth;
+  const height = gl.drawingBufferHeight;
+  const raw = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    data.set(raw.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
+  }
+  return { width, height, data };
+}
+
+async function exportNow(core) {
+  core.renderNow();
+  return readBlob(await core.export({ type: 'image/png', tileSize: 512 }));
+}
+
+try {
+  const mesh = syntheticMesh();
+  const anchors = anchorsFromLandmarks([mesh]);
+  out(`anchor count=${anchors.length}`);
+  if (anchors.length !== 1) throw new Error('expected one anchor');
+  const anchor = anchors[0];
+  out(`box=${anchor.box.x.toFixed(3)},${anchor.box.y.toFixed(3)} ${anchor.box.w.toFixed(3)}x${anchor.box.h.toFixed(3)}`);
+  out(`eyeL=${anchor.eyeL.x.toFixed(3)},${anchor.eyeL.y.toFixed(3)} eyeR=${anchor.eyeR.x.toFixed(3)},${anchor.eyeR.y.toFixed(3)}`);
+  out(`nose=${anchor.nose.x.toFixed(3)},${anchor.nose.y.toFixed(3)} mouth=${anchor.mouth.x.toFixed(3)},${anchor.mouth.y.toFixed(3)}`);
+
+  out(anchor.eyeL.x < 0 && anchor.eyeR.x > 0 ? 'OK eye sides' : 'WARN eye sides');
+  out(anchor.eyeL.y < 0 && anchor.eyeR.y < 0 ? 'OK eyes above centre' : 'WARN eye height');
+  out(anchor.mouth.y > anchor.nose.y ? 'OK mouth below nose' : 'WARN nose/mouth order');
+  const radiusOk = [anchor.eyeLRadius, anchor.eyeRRadius, anchor.noseRadius, anchor.mouthRadius]
+    .every((r) => r.x >= 0.02 && r.x <= 0.6 && r.y >= 0.02 && r.y <= 0.6);
+  out(radiusOk ? 'OK radii bounded' : 'WARN radii out of range');
+  out(anchorsFromLandmarks([mesh.slice(0, 100)]).length === 0 ? 'OK short mesh rejected' : 'WARN short mesh accepted');
+
+  const image = faceCanvas();
+  const refined = createCore({
+    container: '#refined',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  const fallback = createCore({
+    container: '#fallback',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await Promise.all([ready(refined), ready(fallback)]);
+  fallback.setFaces([FACE]);
+  refined.setFaces([FACE]);
+  refined.setFaceAnchors(anchors);
+  out(refined.hasFaceAnchors() ? 'OK anchors active' : 'WARN anchors inactive');
+  refined.setResultMode(true);
+  fallback.setResultMode(true);
+  await settle();
+
+  const neutralRefined = await exportNow(refined);
+  const neutralFallback = await exportNow(fallback);
+  const neutral = psnr(neutralRefined.data, neutralFallback.data);
+  out(`neutral with anchors: PSNR=${neutral.psnr.toFixed(2)} dB max=${neutral.max}`);
+
+  for (const key of ['faceSlim', 'jawline', 'chin', 'eyeSize', 'noseSize', 'mouthSize']) {
+    refined.setAdjust(key, 100);
+  }
+  await settle(200);
+  const shaped = await exportNow(refined);
+  const shapedDiff = psnr(shaped.data, neutralRefined.data);
+  const outside = roiDiff(shaped, neutralRefined, 0, 0, 0.12, 0.12);
+  const inside = roiDiff(shaped, neutralRefined, 0.3, 0.27, 0.7, 0.74);
+  out(`anchored shape: PSNR=${shapedDiff.psnr.toFixed(2)} dB max=${shapedDiff.max}`);
+  out(`outside face diff=${outside.toFixed(3)} inside face diff=${inside.toFixed(2)}`);
+
+  const preview = captureGL(refined);
+  const parityExport = await exportNow(refined);
+  if (preview && preview.width === parityExport.width && preview.height === parityExport.height) {
+    const p = psnr(preview.data, parityExport.data);
+    out(`preview vs export with anchors: PSNR=${p.psnr.toFixed(2)} dB max=${p.max}`);
+  } else {
+    out(`preview vs export with anchors: size mismatch preview=${preview && preview.width}x${preview && preview.height} export=${parityExport.width}x${parityExport.height}`);
+  }
+
+  // The landmark eye centre is the scaling anchor; it must stay put.
+  const center = { x: anchor.box.x + anchor.box.w / 2, y: anchor.box.y + anchor.box.h / 2 };
+  const half = { x: anchor.box.w / 2, y: anchor.box.h / 2 };
+  const eye = {
+    u: center.x + anchor.eyeL.x * half.x,
+    v: center.y + anchor.eyeL.y * half.y,
+  };
+  const eyeDiff = roiDiff(shaped, neutralRefined, eye.u - 0.008, eye.v - 0.008, eye.u + 0.008, eye.v + 0.008);
+  out(`landmark eye anchor diff=${eyeDiff.toFixed(3)}`);
+
+  // Clearing anchors must reproduce the fallback path exactly.
+  refined.setFaceAnchors(null);
+  fallback.setAdjust('faceSlim', 100);
+  fallback.setAdjust('jawline', 100);
+  fallback.setAdjust('chin', 100);
+  fallback.setAdjust('eyeSize', 100);
+  fallback.setAdjust('noseSize', 100);
+  fallback.setAdjust('mouthSize', 100);
+  await settle(200);
+  const cleared = await exportNow(refined);
+  const fallbackShaped = await exportNow(fallback);
+  const clearedParity = psnr(cleared.data, fallbackShaped.data);
+  out(`cleared anchors vs fallback: PSNR=${clearedParity.psnr.toFixed(2)} dB max=${clearedParity.max}`);
+  out(!refined.hasFaceAnchors() ? 'OK anchors cleared' : 'WARN anchors still active');
+
+  out(neutral.psnr === Infinity ? 'OK neutral parity' : 'WARN neutral differs');
+  out(outside < 0.05 ? 'OK outside face untouched' : 'WARN outside face changed');
+  out(shapedDiff.psnr < 50 ? 'OK anchors change geometry' : 'WARN anchors had no effect');
+  out(eyeDiff < 1 ? 'OK eye anchor stable' : 'WARN eye anchor moved');
+  out(clearedParity.psnr === Infinity ? 'OK fallback parity' : 'WARN fallback differs');
+  out('done');
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+}
+</script>
+</body>
+</html>

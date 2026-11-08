@@ -1,0 +1,65 @@
+{
+  "name": "aurum-image-editor",
+  "version": "1.0.0",
+  "description": "Aurum — a lightweight, headless-first web image editor with an optional iOS-style dark/gold UI.",
+  "type": "module",
+  "main": "dist/aurum.cjs",
+  "module": "dist/aurum.esm.js",
+  "browser": "dist/aurum.min.js",
+  "unpkg": "dist/aurum.min.js",
+  "jsdelivr": "dist/aurum.min.js",
+  "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/aurum.esm.js",
+      "require": "./dist/aurum.cjs",
+      "default": "./dist/aurum.esm.js"
+    },
+    "./aurum.css": "./dist/aurum.css",
+    "./beauty": {
+      "types": "./dist/types/beauty/index.d.ts",
+      "import": "./dist/aurum-beauty.esm.js",
+      "default": "./dist/aurum-beauty.esm.js"
+    },
+    "./landmarks": {
+      "types": "./dist/types/landmarks/index.d.ts",
+      "import": "./dist/aurum-landmarks.esm.js",
+      "default": "./dist/aurum-landmarks.esm.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "build:shaders": "node scripts/build-shaders.mjs",
+    "sync:assets": "node scripts/sync-assets.mjs",
+    "build:all": "npm run build && npm run sync:assets",
+    "typecheck": "tsc --noEmit",
+    "demo": "python -m http.server 4173",
+    "check": "npm run build && npm run typecheck"
+  },
+  "keywords": [
+    "image-editor",
+    "canvas",
+    "webgl",
+    "crop",
+    "filters",
+    "gestures",
+    "typescript",
+    "headless"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "onnxruntime-web": "^1.31.1",
+    "typescript": "^5.9.3"
+  }
+}

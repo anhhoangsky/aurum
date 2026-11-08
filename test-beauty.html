@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum beauty mask test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .hosts { display: flex; gap: 16px; flex-wrap: wrap; }
+  .host { width: 512px; height: 512px; position: relative; flex: 0 0 auto; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="hosts">
+  <div id="masked" class="host"></div>
+  <div id="plain" class="host"></div>
+</div>
+<pre id="log">Running…</pre>
+<script type="module">
+import { createCore } from './dist/aurum.esm.js?v=20261102d';
+import { buildBeautyMask, beautyMaskStats } from './dist/aurum-beauty.esm.js?v=20261102d';
+
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+// A synthetic portrait: hair, face oval, neck, eyes/brows, lips, cheek noise
+// and a dark blemish. All coordinates are normalised so the mask builder and
+// the shader see the same geometry.
+const FACE = { x: 0.2, y: 0.12, w: 0.6, h: 0.76 };
+const SPOT = { u: 0.34, v: 0.62, r: 5 };
+const CHEEK = { u: 0.64, v: 0.58, r: 18 };
+
+function faceCanvas(width = 512, height = 512) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#243033';
+  ctx.fillRect(0, 0, width, height);
+
+  const x = FACE.x * width;
+  const y = FACE.y * height;
+  const w = FACE.w * width;
+  const h = FACE.h * height;
+
+  // Hair behind the face.
+  ctx.fillStyle = '#17110e';
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h * 0.36, w * 0.58, h * 0.55, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Neck and face.
+  ctx.fillStyle = '#bf8561';
+  ctx.fillRect(x + w * 0.36, y + h * 0.82, w * 0.28, h * 0.4);
+  ctx.fillStyle = '#c98f6b';
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h * 0.5, w * 0.44, h * 0.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Brows and eyes, both much darker than skin.
+  ctx.fillStyle = '#2c1c16';
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.32, y + h * 0.31, w * 0.11, h * 0.045, 0.12, 0, Math.PI * 2);
+  ctx.ellipse(x + w * 0.68, y + h * 0.31, w * 0.11, h * 0.045, -0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#1a1114';
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.32, y + h * 0.42, w * 0.075, h * 0.05, 0, 0, Math.PI * 2);
+  ctx.ellipse(x + w * 0.68, y + h * 0.42, w * 0.075, h * 0.05, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Lips.
+  ctx.fillStyle = '#a84f52';
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.5, y + h * 0.7, w * 0.1, h * 0.035, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Fine skin grain, so texture preservation can be measured.
+  const image = ctx.getImageData(x, y, w, h);
+  for (let i = 0; i < image.data.length; i += 4) {
+    const n = (Math.random() - 0.5) * 18;
+    image.data[i] += n;
+    image.data[i + 1] += n;
+    image.data[i + 2] += n;
+  }
+  ctx.putImageData(image, x, y);
+
+  // A blemish: darker and redder than the surrounding cheek.
+  ctx.fillStyle = '#8a3a32';
+  ctx.beginPath();
+  ctx.arc(SPOT.u * width, SPOT.v * height, SPOT.r, 0, Math.PI * 2);
+  ctx.fill();
+
+  return canvas;
+}
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+
+// Timers keep this harness usable when the desktop window is not frontmost;
+// requestAnimationFrame can be paused while the page is still visible.
+const frames = (n = 3) => new Promise((resolve) => {
+  const step = () => (n-- <= 0 ? resolve() : setTimeout(step, 16));
+  setTimeout(step, 16);
+});
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function readCanvas(canvas) {
+  const copy = document.createElement('canvas');
+  copy.width = canvas.width;
+  copy.height = canvas.height;
+  const ctx = copy.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(canvas, 0, 0);
+  return {
+    width: copy.width,
+    height: copy.height,
+    data: ctx.getImageData(0, 0, copy.width, copy.height).data,
+  };
+}
+
+function captureGL(core) {
+  return new Promise((resolve) => {
+    core.setPreviewQuality('high');
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const read = () => {
+      const gl = core.canvas.getContext('webgl');
+      if (!gl) {
+        finish(null);
+        return;
+      }
+      const width = gl.drawingBufferWidth;
+      const height = gl.drawingBufferHeight;
+      const raw = new Uint8Array(width * height * 4);
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+      const data = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y += 1) {
+        data.set(raw.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
+      }
+      finish({ width, height, data });
+    };
+    // renderNow paints synchronously, so the harness also works when the
+    // desktop window is not frontmost and rAF is paused.
+    if (typeof core.renderNow === 'function') {
+      core.renderNow();
+      read();
+      return;
+    }
+    setTimeout(() => finish(null), 2000);
+    requestAnimationFrame(read);
+  });
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 4) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = a[i + k] - b[i + k];
+      sum += d * d;
+      max = Math.max(max, Math.abs(d));
+    }
+  }
+  const mse = sum / (n * 0.75);
+  return { mse, max, psnr: mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse) };
+}
+
+function roiDiff(a, b, u0, v0, u1, v1) {
+  const x0 = Math.round(u0 * a.width);
+  const x1 = Math.round(u1 * a.width);
+  const y0 = Math.round(v0 * a.height);
+  const y1 = Math.round(v1 * a.height);
+  let sum = 0;
+  let count = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const at = (y * a.width + x) * 4;
+      sum += (Math.abs(a.data[at] - b.data[at]) +
+        Math.abs(a.data[at + 1] - b.data[at + 1]) +
+        Math.abs(a.data[at + 2] - b.data[at + 2])) / 3;
+      count += 1;
+    }
+  }
+  return sum / Math.max(1, count);
+}
+
+function lumaVariance(image, u, v, r) {
+  const cx = Math.round(u * image.width);
+  const cy = Math.round(v * image.height);
+  let sum = 0;
+  let sum2 = 0;
+  let n = 0;
+  for (let y = cy - r; y <= cy + r; y += 1) {
+    for (let x = cx - r; x <= cx + r; x += 1) {
+      const at = (y * image.width + x) * 4;
+      const l = 0.2126 * image.data[at] + 0.7152 * image.data[at + 1] + 0.0722 * image.data[at + 2];
+      sum += l;
+      sum2 += l * l;
+      n += 1;
+    }
+  }
+  return sum2 / n - (sum / n) ** 2;
+}
+
+function lumaAt(image, u, v) {
+  const at = (Math.round(v * image.height) * image.width + Math.round(u * image.width)) * 4;
+  return 0.2126 * image.data[at] + 0.7152 * image.data[at + 1] + 0.0722 * image.data[at + 2];
+}
+
+function maskAt(mask, u, v) {
+  const x = Math.min(mask.width - 1, Math.round(u * mask.width));
+  const y = Math.min(mask.height - 1, Math.round(v * mask.height));
+  const at = (y * mask.width + x) * 4;
+  return { skin: mask.data[at], protect: mask.data[at + 1], lips: mask.data[at + 2] };
+}
+
+try {
+  const image = faceCanvas();
+  const mask = buildBeautyMask(image, { faces: [FACE], maxSize: 512, feather: 2 });
+  const stats = beautyMaskStats(mask);
+  out(`mask: ${mask.width}x${mask.height} skin=${stats.skin.toFixed(3)} protect=${stats.protect.toFixed(3)} lips=${stats.lips.toFixed(4)}`);
+  out(`mask cheek  R=${maskAt(mask, CHEEK.u, CHEEK.v).skin} G=${maskAt(mask, CHEEK.u, CHEEK.v).protect}`);
+  out(`mask eye    R=${maskAt(mask, 0.392, 0.439).skin} G=${maskAt(mask, 0.392, 0.439).protect}`);
+  out(`mask lips   R=${maskAt(mask, 0.5, 0.652).skin} B=${maskAt(mask, 0.5, 0.652).lips}`);
+  out(`mask spot   R=${maskAt(mask, SPOT.u, SPOT.v).skin} G=${maskAt(mask, SPOT.u, SPOT.v).protect}`);
+  out(`mask corner R=${maskAt(mask, 0.02, 0.02).skin} G=${maskAt(mask, 0.02, 0.02).protect}`);
+
+  const masked = createCore({
+    container: '#masked',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  const plain = createCore({
+    container: '#plain',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await Promise.all([ready(masked), ready(plain)]);
+  window.testCores = { masked, plain };
+  out('cores ready');
+  masked.setFaces([FACE]);
+  masked.setBeautyMask(mask);
+  masked.setResultMode(true);
+  plain.setResultMode(true);
+  await frames(4);
+  out('frames rendered');
+
+  const neutralMasked = await readBlob(await masked.export({ type: 'image/png', tileSize: 512 }));
+  out('masked export');
+  const neutralPlain = await readBlob(await plain.export({ type: 'image/png', tileSize: 512 }));
+  out('plain export');
+  const neutral = psnr(neutralMasked.data, neutralPlain.data);
+  out(`neutral with mask: PSNR=${neutral.psnr.toFixed(2)} dB max=${neutral.max}`);
+
+  masked.setAdjust('smoothSkin', 100);
+  masked.setAdjust('skinTexture', 0);
+  await frames(4);
+  const smoothFlat = await readBlob(await masked.export({ type: 'image/png', tileSize: 512 }));
+
+  masked.setAdjust('skinTexture', 100);
+  await frames(4);
+  const smoothKeep = await readBlob(await masked.export({ type: 'image/png', tileSize: 512 }));
+
+  const cheekFlat = roiDiff(smoothFlat, neutralMasked, CHEEK.u - 0.08, CHEEK.v - 0.05, CHEEK.u + 0.08, CHEEK.v + 0.05);
+  const eyeFlat = roiDiff(smoothFlat, neutralMasked, 0.34, 0.38, 0.45, 0.49);
+  const cheekVarFlat = lumaVariance(smoothFlat, CHEEK.u, CHEEK.v, CHEEK.r);
+  const cheekVarKeep = lumaVariance(smoothKeep, CHEEK.u, CHEEK.v, CHEEK.r);
+  out(`smoothing cheek diff=${cheekFlat.toFixed(2)} eye diff=${eyeFlat.toFixed(2)}`);
+  out(`texture variance flat=${cheekVarFlat.toFixed(2)} keep=${cheekVarKeep.toFixed(2)}`);
+
+  masked.setAdjust('smoothSkin', 0);
+  masked.setAdjust('skinTexture', 55);
+  masked.setAdjust('blemish', 100);
+  await frames(4);
+  const blemish = await readBlob(await masked.export({ type: 'image/png', tileSize: 512 }));
+  out(`blemish luma: base=${lumaAt(neutralMasked, SPOT.u, SPOT.v).toFixed(1)} removed=${lumaAt(blemish, SPOT.u, SPOT.v).toFixed(1)}`);
+
+  masked.setAdjust('blemish', 0);
+  masked.setAdjust('smoothSkin', 55);
+  await frames(4);
+  const preview = await captureGL(masked);
+  const parityExport = await readBlob(await masked.export({ type: 'image/png', tileSize: 512 }));
+  if (preview && preview.width === parityExport.width && preview.height === parityExport.height) {
+    const p = psnr(preview.data, parityExport.data);
+    out(`preview vs export with mask: PSNR=${p.psnr.toFixed(2)} dB max=${p.max}`);
+  } else {
+    out(`preview vs export with mask: size mismatch preview=${preview && preview.width}x${preview && preview.height} export=${parityExport.width}x${parityExport.height}`);
+  }
+
+  // The mask must not leak into the untouched pipeline: neutral rendering is
+  // byte-identical whether a mask is attached or not.
+  out(neutral.psnr === Infinity ? 'OK neutral parity' : 'WARN neutral differs');
+
+  // Informational preview of the mask channels for a human check.
+  const maskCanvas = document.createElement('canvas');
+  maskCanvas.width = mask.width;
+  maskCanvas.height = mask.height;
+  maskCanvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(mask.data), mask.width, mask.height), 0, 0);
+  document.body.append(maskCanvas);
+
+  out('done');
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+}
+</script>
+</body>
+</html>

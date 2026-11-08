@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aurum layout frame</title>
+    <style>
+      html, body { margin: 0; background: #08080a; }
+      iframe { display: block; border: 0; }
+    </style>
+  </head>
+  <body>
+    <iframe id="frame"></iframe>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const width = Number(params.get('w') || 390);
+      const height = Number(params.get('h') || 844);
+      const tab = params.get('tab') || 'crop';
+      const frame = document.querySelector('#frame');
+      frame.style.width = `${width}px`;
+      frame.style.height = `${height}px`;
+      frame.src = `./layout-test.html?w=${width}&h=${height}&tab=${tab}&v=${params.get('v') || '1'}`;
+      window.frameEl = frame;
+    </script>
+  </body>
+</html>

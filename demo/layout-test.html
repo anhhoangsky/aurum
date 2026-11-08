@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Aurum layout test</title>
+    <style>
+      html, body { margin: 0; background: #08080a; }
+      #host { position: relative; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <div id="host"></div>
+    <script type="module">
+      import { AurumEditor } from '../dist/aurum.esm.js';
+
+      const params = new URLSearchParams(location.search);
+      const width = Number(params.get('w') || 390);
+      const height = Number(params.get('h') || 844);
+      const tab = params.get('tab') || 'crop';
+      const host = document.querySelector('#host');
+      host.style.width = `${width}px`;
+      host.style.height = `${height}px`;
+
+      const editor = new AurumEditor({
+        container: host,
+        image: './sample-landscape.jpg',
+        fileName: 'aurum-layout',
+        locale: 'vi',
+        startTab: tab,
+        onSave: () => {},
+      });
+      window.aurum = editor;
+    </script>
+  </body>
+</html>

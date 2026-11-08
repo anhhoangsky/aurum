@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aurum high-quality tiling test (split run)</title>
+    <style>
+      html, body { margin: 0; background: #111; color: #eee; font: 12px/1.5 monospace; }
+      #log { white-space: pre-wrap; padding: 12px; }
+      canvas { display: block; margin: 8px 12px; max-width: 92vw; height: auto; image-rendering: pixelated; }
+    </style>
+  </head>
+  <body>
+    <pre id="log"></pre>
+    <script type="module">
+      import * as ai from '../dist/aurum-ai.esm.js';
+      import { runAIPipeline } from '../dist/aurum.esm.js';
+
+      const params = new URLSearchParams(location.search);
+      const mode = params.get('mode') === 'tiled' ? 'tiled' : 'full';
+      const logEl = document.querySelector('#log');
+      const log = (message) => {
+        console.log(message);
+        logEl.textContent += `${message}\n`;
+      };
+
+      function sourceCanvas(width, height) {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const gradient = ctx.createLinearGradient(0, 0, width, height);
+        gradient.addColorStop(0, '#0b1d33');
+        gradient.addColorStop(0.45, '#d9a0c0');
+        gradient.addColorStop(1, '#1f5a3a');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+        let seed = 1234567;
+        const random = () => {
+          seed = (seed * 1664525 + 1013904223) >>> 0;
+          return seed / 4294967296;
+        };
+        for (let i = 0; i < 9000; i += 1) {
+          const x = Math.floor(random() * width);
+          const y = Math.floor(random() * height);
+          const r = 1 + Math.floor(random() * 3);
+          ctx.fillStyle = `rgba(${Math.floor(random() * 255)},${Math.floor(random() * 255)},${Math.floor(random() * 255)},0.8)`;
+          ctx.fillRect(x, y, r, r);
+        }
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        for (let x = 10; x < width; x += 40) {
+          ctx.beginPath();
+          ctx.moveTo(x, 8);
+          ctx.lineTo(x, height - 8);
+          ctx.stroke();
+        }
+        ctx.font = '700 26px sans-serif';
+        ctx.fillStyle = '#fff';
+        ctx.fillText('SEAM 320', 100, 90);
+        return canvas;
+      }
+
+      function adapter(plan, profile) {
+        const asset = (name) => new URL(`../dist/ai/${name}`, location.href).href;
+        return ai
+          .createRealESRGANFactory({
+            modelUrl: asset(plan.modelFile),
+            modelSizeMB: plan.modelSizeMB,
+            runtime: {
+              webgpu: asset('ort.webgpu.bundle.min.mjs'),
+              wasm: asset('ort.wasm.bundle.min.mjs'),
+            },
+            backend: plan.backend,
+            profile,
+            onStatus: log,
+          })
+          .load();
+      }
+
+      function imageFrom(url) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error(`cannot load ${url}`));
+          img.src = url;
+        });
+      }
+
+      function pixels(canvas) {
+        return canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      }
+
+      try {
+        const profile = await ai.probeAIClient();
+        log(`profile backend=${profile.backend}`);
+        if (profile.backend !== 'webgpu') throw new Error('WebGPU is required for this test');
+
+        const source = sourceCanvas(320, 160);
+        const tiled = mode === 'tiled';
+        const tileSize = tiled ? 160 : 320;
+        const halo = tiled ? 96 : 0;
+        const plan = ai.planRealESRGAN({
+          width: 320,
+          height: 160,
+          profile,
+          model: 'high',
+          tileSize,
+          halo,
+        });
+        log(`plan ${JSON.stringify(plan)}`);
+        const output = await runAIPipeline(await adapter(plan, profile), source, {
+          tileSize,
+          halo,
+          scale: 4,
+          maxInputPixels: 320 * 160,
+          maxOutputPixels: 320 * 160 * 16,
+          onStage: (stage, done, total) => log(`${mode} ${stage} ${done ?? ''}/${total ?? ''}`),
+        });
+        log(`output ${output.width}x${output.height}`);
+
+        if (!tiled) {
+          window.__png = output.toDataURL('image/png');
+          window.__done = true;
+        } else {
+          const reference = await imageFrom('ref.png');
+          const refCanvas = document.createElement('canvas');
+          refCanvas.width = reference.width;
+          refCanvas.height = reference.height;
+          refCanvas.getContext('2d').drawImage(reference, 0, 0);
+          if (refCanvas.width !== output.width || refCanvas.height !== output.height) {
+            throw new Error(`size mismatch ref=${refCanvas.width}x${refCanvas.height} tiled=${output.width}x${output.height}`);
+          }
+          const a = pixels(refCanvas);
+          const b = pixels(output);
+          let sum = 0;
+          let max = 0;
+          let count = 0;
+          let mse = 0;
+          for (let i = 0; i < a.length; i += 4) {
+            for (let c = 0; c < 3; c += 1) {
+              const d = Math.abs(a[i + c] - b[i + c]);
+              sum += d;
+              mse += d * d;
+              if (d > max) max = d;
+              count += 1;
+            }
+          }
+          const seamX = 640;
+          const gradientAt = (x) => {
+            let total = 0;
+            let n = 0;
+            for (let y = 0; y < output.height; y += 1) {
+              const i = (y * output.width + x) * 4;
+              for (let c = 0; c < 3; c += 1) {
+                total += Math.abs(b[i + c] - b[i - 4 + c]);
+                n += 1;
+              }
+            }
+            return total / n;
+          };
+          const seam = gradientAt(seamX);
+          const control = gradientAt(seamX - 80);
+          const result = {
+            mode,
+            mean: sum / count,
+            max,
+            psnr: 10 * Math.log10((255 * 255) / (mse / count)),
+            seam,
+            control,
+            seamRatio: seam / control,
+          };
+          log(`RESULT ${JSON.stringify(result)}`);
+          document.body.append(output);
+          window.__png = output.toDataURL('image/png');
+          window.__result = result;
+          window.__done = true;
+        }
+      } catch (error) {
+        log(`ERR ${error && error.stack ? error.stack : error}`);
+        window.__error = String(error);
+      }
+    </script>
+  </body>
+</html>

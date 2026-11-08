@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum AI runtime probe</title>
+<style>body{font:13px/1.5 ui-monospace,monospace;background:#111;color:#eee;padding:20px}pre{white-space:pre-wrap}</style>
+</head>
+<body>
+<pre id="log">loading…</pre>
+<script type="module">
+const logEl = document.getElementById('log');
+const lines = [];
+const log = (m) => {
+  lines.push(m);
+  logEl.textContent = lines.join('\n');
+  console.log(m);
+};
+try {
+  const base = new URL('./node_modules/onnxruntime-web/dist/', location.href).href;
+  const backend = new URLSearchParams(location.search).get('backend') || 'wasm';
+  const bundle = backend === 'webgpu' ? 'ort.webgpu.bundle.min.mjs' : 'ort.wasm.bundle.min.mjs';
+  const t0 = performance.now();
+  const ort = await import(base + bundle);
+  log(`import ${bundle}: ${(performance.now() - t0).toFixed(0)} ms`);
+  ort.env.wasm.wasmPaths = base;
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.proxy = false;
+  ort.env.logLevel = 'warning';
+  log(`ort web ${ort.env.versions.web}`);
+  const modelUrl = new URL('../mng-cloud-work/assets/ai/realesr-general-x4v3.onnx', location.href).href;
+  const t1 = performance.now();
+  const session = await ort.InferenceSession.create(modelUrl, {
+    executionProviders: [backend === 'webgpu' ? 'webgpu' : 'wasm'],
+    graphOptimizationLevel: 'all',
+  });
+  log(`session (${backend}): ${(performance.now() - t1).toFixed(0)} ms`);
+  log(`inputs=${session.inputNames.join(',')} outputs=${session.outputNames.join(',')}`);
+  const w = 64, h = 64;
+  const data = new Float32Array(3 * w * h);
+  for (let i = 0; i < data.length; i += 1) data[i] = Math.random();
+  const tensor = new ort.Tensor('float32', data, [1, 3, h, w]);
+  const t2 = performance.now();
+  const out = await session.run({ [session.inputNames[0]]: tensor });
+  const result = out[session.outputNames[0]];
+  log(`run: ${(performance.now() - t2).toFixed(0)} ms dims=${Array.from(result.dims).join('x')} type=${result.type}`);
+  let min = Infinity, max = -Infinity;
+  for (const v of result.data) { if (v < min) min = v; if (v > max) max = v; }
+  log(`output range: ${min.toFixed(4)} .. ${max.toFixed(4)}`);
+  log('OK');
+} catch (error) {
+  log('FAILED: ' + (error && error.stack ? error.stack : error));
+}
+</script>
+</body>
+</html>

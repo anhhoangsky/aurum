@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum live MediaPipe landmark test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  #host { width: 512px; height: 512px; position: relative; margin-bottom: 12px; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<pre id="log">Loading model…</pre>
+<script type="module">
+import { createCore } from './dist/aurum.esm.js?v=20261102d';
+import { closeFaceLandmarker, detectFaceAnchors } from './dist/aurum-landmarks.esm.js?v=20261102d';
+
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Could not load ${url}`));
+    image.src = url;
+  });
+}
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+
+try {
+  const image = await loadImage('./test-assets/portrait.jpg');
+  out(`image ${image.naturalWidth}x${image.naturalHeight}`);
+
+  const started = performance.now();
+  const anchors = await detectFaceAnchors(image, {
+    moduleUrl: '/mng-cloud-work/assets/landmarks/vision_bundle.js?v=20261102d',
+    modelUrl: '/mng-cloud-work/assets/landmarks/face_landmarker.task?v=20261102d',
+    wasm: {
+      loaderUrl: '/mng-cloud-work/assets/landmarks/simd/vision_wasm_internal.js?v=20261102d',
+      binaryUrl: '/mng-cloud-work/assets/landmarks/simd/vision_wasm_internal.wasm?v=20261102d',
+    },
+    nosimd: {
+      loaderUrl: '/mng-cloud-work/assets/landmarks/nosimd/vision_wasm_nosimd_internal.js?v=20261102d',
+      binaryUrl: '/mng-cloud-work/assets/landmarks/nosimd/vision_wasm_nosimd_internal.wasm?v=20261102d',
+    },
+    maxSize: 960,
+    numFaces: 4,
+  });
+  out(`detect ${Math.round(performance.now() - started)} ms, anchors=${anchors.length}`);
+  if (!anchors.length) throw new Error('MediaPipe returned no faces');
+  for (const anchor of anchors) {
+    out(`box=${anchor.box.x.toFixed(3)},${anchor.box.y.toFixed(3)} ${anchor.box.w.toFixed(3)}x${anchor.box.h.toFixed(3)}`);
+    out(`eyeL=${anchor.eyeL.x.toFixed(3)},${anchor.eyeL.y.toFixed(3)} eyeR=${anchor.eyeR.x.toFixed(3)},${anchor.eyeR.y.toFixed(3)}`);
+    out(`nose=${anchor.nose.x.toFixed(3)},${anchor.nose.y.toFixed(3)} mouth=${anchor.mouth.x.toFixed(3)},${anchor.mouth.y.toFixed(3)}`);
+    out(`radii eyes=${anchor.eyeLRadius.x.toFixed(2)}/${anchor.eyeLRadius.y.toFixed(2)} nose=${anchor.noseRadius.x.toFixed(2)}/${anchor.noseRadius.y.toFixed(2)} mouth=${anchor.mouthRadius.x.toFixed(2)}/${anchor.mouthRadius.y.toFixed(2)}`);
+  }
+
+  const core = createCore({
+    container: '#host',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await ready(core);
+  core.setFaces(anchors.map((anchor) => anchor.box));
+  core.setFaceAnchors(anchors);
+  core.setResultMode(true);
+  core.setPreviewQuality('high');
+  for (const key of ['eyeSize', 'noseSize', 'mouthSize', 'faceSlim']) {
+    core.setAdjust(key, 60);
+  }
+  core.renderNow();
+  out(core.hasFaceAnchors() ? 'OK core accepted anchors' : 'WARN core rejected anchors');
+  out('done');
+  closeFaceLandmarker();
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+  closeFaceLandmarker();
+}
+</script>
+</body>
+</html>

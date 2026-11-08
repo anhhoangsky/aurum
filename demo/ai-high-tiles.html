@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aurum high-quality tiling test</title>
+    <style>
+      html, body { margin: 0; background: #111; color: #eee; font: 12px/1.5 monospace; }
+      #log { white-space: pre-wrap; padding: 12px; }
+      canvas { display: block; margin: 8px 12px; max-width: 92vw; height: auto; image-rendering: pixelated; }
+    </style>
+  </head>
+  <body>
+    <pre id="log"></pre>
+    <script type="module">
+      import * as ai from '../dist/aurum-ai.esm.js';
+      import { runAIPipeline } from '../dist/aurum.esm.js';
+
+      const logEl = document.querySelector('#log');
+      const log = (message) => {
+        console.log(message);
+        logEl.textContent += `${message}\n`;
+      };
+
+      function sourceCanvas(width, height) {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const gradient = ctx.createLinearGradient(0, 0, width, height);
+        gradient.addColorStop(0, '#0b1d33');
+        gradient.addColorStop(0.45, '#d9a0c0');
+        gradient.addColorStop(1, '#1f5a3a');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+        // Deterministic fine detail across the whole frame, including the seam.
+        let seed = 1234567;
+        const random = () => {
+          seed = (seed * 1664525 + 1013904223) >>> 0;
+          return seed / 4294967296;
+        };
+        for (let i = 0; i < 9000; i += 1) {
+          const x = Math.floor(random() * width);
+          const y = Math.floor(random() * height);
+          const r = 1 + Math.floor(random() * 3);
+          ctx.fillStyle = `rgba(${Math.floor(random() * 255)},${Math.floor(random() * 255)},${Math.floor(random() * 255)},0.8)`;
+          ctx.fillRect(x, y, r, r);
+        }
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        for (let x = 10; x < width; x += 40) {
+          ctx.beginPath();
+          ctx.moveTo(x, 8);
+          ctx.lineTo(x, height - 8);
+          ctx.stroke();
+        }
+        ctx.font = '700 26px sans-serif';
+        ctx.fillStyle = '#fff';
+        ctx.fillText('SEAM 320', 100, 90);
+        return canvas;
+      }
+
+      function adapter(plan, profile) {
+        const asset = (name) => new URL(`../dist/ai/${name}`, location.href).href;
+        return ai
+          .createRealESRGANFactory({
+            modelUrl: asset(plan.modelFile),
+            modelSizeMB: plan.modelSizeMB,
+            runtime: {
+              webgpu: asset('ort.webgpu.bundle.min.mjs'),
+              wasm: asset('ort.wasm.bundle.min.mjs'),
+            },
+            backend: plan.backend,
+            profile,
+            onStatus: log,
+          })
+          .load();
+      }
+
+      function compare(a, b, label) {
+        const ctxA = a.getContext('2d');
+        const ctxB = b.getContext('2d');
+        const dataA = ctxA.getImageData(0, 0, a.width, a.height).data;
+        const dataB = ctxB.getImageData(0, 0, b.width, b.height).data;
+        let sum = 0;
+        let max = 0;
+        let count = 0;
+        for (let i = 0; i < dataA.length; i += 4) {
+          for (let c = 0; c < 3; c += 1) {
+            const d = Math.abs(dataA[i + c] - dataB[i + c]);
+            sum += d;
+            if (d > max) max = d;
+            count += 1;
+          }
+        }
+        const seamX = 640;
+        const boundary = (() => {
+          let total = 0;
+          let n = 0;
+          for (let y = 0; y < a.height; y += 1) {
+            const i = (y * a.width + seamX) * 4;
+            for (let c = 0; c < 3; c += 1) {
+              total += Math.abs(dataB[i + c] - dataB[i - 4 + c]);
+              n += 1;
+            }
+          }
+          return total / n;
+        })();
+        const control = (() => {
+          let total = 0;
+          let n = 0;
+          const x = seamX - 80;
+          for (let y = 0; y < a.height; y += 1) {
+            const i = (y * a.width + x) * 4;
+            for (let c = 0; c < 3; c += 1) {
+              total += Math.abs(dataB[i + c] - dataB[i - 4 + c]);
+              n += 1;
+            }
+          }
+          return total / n;
+        })();
+        log(
+          `${label}: mean=${(sum / count).toFixed(3)} max=${max} ` +
+            `seamGradient=${boundary.toFixed(2)} control=${control.toFixed(2)}`,
+        );
+        return { mean: sum / count, max, boundary, control };
+      }
+
+      try {
+        const profile = await ai.probeAIClient();
+        log(`profile ${JSON.stringify(profile)}`);
+        const source = sourceCanvas(320, 160);
+        document.body.append(source);
+
+        const fullPlan = ai.planRealESRGAN({
+          width: 320,
+          height: 160,
+          profile,
+          model: 'high',
+          tileSize: 320,
+          halo: 0,
+        });
+        log(`full plan ${JSON.stringify(fullPlan)}`);
+        const full = await runAIPipeline(await adapter(fullPlan, profile), source, {
+          tileSize: 320,
+          halo: 0,
+          scale: 4,
+          maxInputPixels: 320 * 160,
+          maxOutputPixels: 320 * 160 * 16,
+          onStage: (stage, done, total) => log(`full ${stage} ${done ?? ''}/${total ?? ''}`),
+        });
+        document.body.append(full);
+
+        const tiledPlan = ai.planRealESRGAN({
+          width: 320,
+          height: 160,
+          profile,
+          model: 'high',
+          tileSize: 160,
+          halo: 96,
+        });
+        log(`tiled plan ${JSON.stringify(tiledPlan)}`);
+        const tiled = await runAIPipeline(await adapter(tiledPlan, profile), source, {
+          tileSize: 160,
+          halo: 96,
+          scale: 4,
+          maxInputPixels: 320 * 160,
+          maxOutputPixels: 320 * 160 * 16,
+          onStage: (stage, done, total) => log(`tiled ${stage} ${done ?? ''}/${total ?? ''}`),
+        });
+        document.body.append(tiled);
+
+        log(`sizes full=${full.width}x${full.height} tiled=${tiled.width}x${tiled.height}`);
+        window.__result = compare(full, tiled, 'halo96-vs-full');
+        window.__done = true;
+      } catch (error) {
+        log(`ERR ${error && error.stack ? error.stack : error}`);
+        window.__error = String(error);
+      }
+    </script>
+  </body>
+</html>

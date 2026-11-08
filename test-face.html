@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum face geometry test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .hosts { display: flex; gap: 16px; flex-wrap: wrap; }
+  .host { width: 512px; height: 512px; position: relative; flex: 0 0 auto; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="hosts">
+  <div id="shaped" class="host"></div>
+  <div id="plain" class="host"></div>
+</div>
+<pre id="log">Running…</pre>
+<script type="module">
+import { createCore } from './dist/aurum.esm.js?v=20261102d';
+
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+const FACE = { x: 0.2, y: 0.1, w: 0.6, h: 0.8 };
+const EYE_L = { u: FACE.x + FACE.w * 0.33, v: FACE.y + FACE.h * 0.41 };
+const EYE_R = { u: FACE.x + FACE.w * 0.67, v: FACE.y + FACE.h * 0.41 };
+const NOSE = { u: FACE.x + FACE.w * 0.5, v: FACE.y + FACE.h * 0.55 };
+const MOUTH = { u: FACE.x + FACE.w * 0.5, v: FACE.y + FACE.h * 0.7 };
+const CHEEK = { u: FACE.x + FACE.w * 0.26, v: FACE.y + FACE.h * 0.58 };
+
+function faceCanvas(width = 512, height = 512) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  // High-contrast grid makes even a small UV displacement visible.
+  ctx.fillStyle = '#20303a';
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = '#7a6a32';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= width; i += 16) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i, height);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i);
+    ctx.lineTo(width, i);
+    ctx.stroke();
+  }
+
+  const x = FACE.x * width;
+  const y = FACE.y * height;
+  const w = FACE.w * width;
+  const h = FACE.h * height;
+
+  ctx.fillStyle = '#c98f6b';
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h / 2, w * 0.44, h * 0.46, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#8a3a32';
+  ctx.beginPath();
+  ctx.arc(CHEEK.u * width, CHEEK.v * height, 18, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#1a1114';
+  for (const eye of [EYE_L, EYE_R]) {
+    ctx.beginPath();
+    ctx.arc(eye.u * width, eye.v * height, 14, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(NOSE.u * width, NOSE.v * height, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(MOUTH.u * width, MOUTH.v * height, 30, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  return canvas;
+}
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+
+const settle = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 4) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = a[i + k] - b[i + k];
+      sum += d * d;
+      max = Math.max(max, Math.abs(d));
+    }
+  }
+  const mse = sum / (n * 0.75);
+  return { mse, max, psnr: mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse) };
+}
+
+function roiDiff(a, b, u0, v0, u1, v1) {
+  const x0 = Math.round(u0 * a.width);
+  const x1 = Math.round(u1 * a.width);
+  const y0 = Math.round(v0 * a.height);
+  const y1 = Math.round(v1 * a.height);
+  let sum = 0;
+  let count = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const at = (y * a.width + x) * 4;
+      sum += (Math.abs(a.data[at] - b.data[at]) +
+        Math.abs(a.data[at + 1] - b.data[at + 1]) +
+        Math.abs(a.data[at + 2] - b.data[at + 2])) / 3;
+      count += 1;
+    }
+  }
+  return sum / Math.max(1, count);
+}
+
+function captureGL(core) {
+  core.setPreviewQuality('high');
+  core.renderNow();
+  const gl = core.canvas.getContext('webgl');
+  if (!gl) return null;
+  const width = gl.drawingBufferWidth;
+  const height = gl.drawingBufferHeight;
+  const raw = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    data.set(raw.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
+  }
+  return { width, height, data };
+}
+
+async function exportNow(core) {
+  core.renderNow();
+  return readBlob(await core.export({ type: 'image/png', tileSize: 512 }));
+}
+
+try {
+  const image = faceCanvas();
+  const shaped = createCore({
+    container: '#shaped',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  const plain = createCore({
+    container: '#plain',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await Promise.all([ready(shaped), ready(plain)]);
+  shaped.setFaces([FACE]);
+  shaped.setResultMode(true);
+  plain.setResultMode(true);
+  await settle();
+
+  const neutralFaces = await exportNow(shaped);
+  const neutralPlain = await exportNow(plain);
+  const neutral = psnr(neutralFaces.data, neutralPlain.data);
+  out(`neutral with face box: PSNR=${neutral.psnr.toFixed(2)} dB max=${neutral.max}`);
+
+  for (const key of ['faceSlim', 'jawline', 'chin', 'eyeSize', 'noseSize', 'mouthSize']) {
+    shaped.setAdjust(key, 100);
+  }
+  await settle(200);
+  const shapedOut = await exportNow(shaped);
+
+  const shapedDiff = psnr(shapedOut.data, neutralFaces.data);
+  const outside = roiDiff(shapedOut, neutralFaces, 0, 0, 0.12, 0.12);
+  const inside = roiDiff(shapedOut, neutralFaces, 0.3, 0.25, 0.7, 0.7);
+  out(`all shape sliders: PSNR=${shapedDiff.psnr.toFixed(2)} dB max=${shapedDiff.max}`);
+  out(`outside face diff=${outside.toFixed(3)} inside face diff=${inside.toFixed(2)}`);
+
+  const preview = captureGL(shaped);
+  const parityExport = await exportNow(shaped);
+  if (preview && preview.width === parityExport.width && preview.height === parityExport.height) {
+    const p = psnr(preview.data, parityExport.data);
+    out(`preview vs export with shape: PSNR=${p.psnr.toFixed(2)} dB max=${p.max}`);
+  } else {
+    out(`preview vs export with shape: size mismatch preview=${preview && preview.width}x${preview && preview.height} export=${parityExport.width}x${parityExport.height}`);
+  }
+
+  // The eye centre is the scaling anchor, so it must stay put.
+  const eyeDiff = roiDiff(shapedOut, neutralFaces, EYE_L.u - 0.006, EYE_L.v - 0.006, EYE_L.u + 0.006, EYE_L.v + 0.006);
+  out(`eye anchor diff=${eyeDiff.toFixed(3)}`);
+
+  out(neutral.psnr === Infinity ? 'OK neutral parity' : 'WARN neutral differs');
+  out(outside < 0.05 ? 'OK outside face untouched' : 'WARN outside face changed');
+  out('done');
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+}
+</script>
+</body>
+</html>

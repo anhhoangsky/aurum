@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum liquify UI test</title>
+<style>
+  body { margin: 0; padding: 12px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  #host { width: 390px; height: 640px; position: relative; background: #000; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<pre id="log">Running…</pre>
+<script type="module">
+import { createEditor } from './dist/aurum.esm.js?v=20261102d';
+
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+function sourceCanvas() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1d2a33';
+  ctx.fillRect(0, 0, 512, 512);
+  ctx.strokeStyle = '#6f6330';
+  for (let i = 0; i <= 512; i += 16) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i, 512);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i);
+    ctx.lineTo(512, i);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#ff2020';
+  ctx.fillRect(300, 180, 10, 152);
+  return canvas;
+}
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 4) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = a[i + k] - b[i + k];
+      sum += d * d;
+      max = Math.max(max, Math.abs(d));
+    }
+  }
+  const mse = sum / (n * 0.75);
+  return { mse, max, psnr: mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse) };
+}
+
+const settle = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
+
+try {
+  const editor = createEditor({
+    container: '#host',
+    image: sourceCanvas(),
+    locale: 'en',
+    startTab: 'adjust',
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await new Promise((resolve) => {
+    if (editor.isReady) resolve();
+    else editor.on('ready', resolve);
+  });
+  await settle(300);
+
+  const stage = document.querySelector('#host .au-stage');
+  const button = document.querySelector('#host .au-param--liquify');
+  const ring = document.querySelector('#host .au-brush-ring');
+  out(`controls: stage=${!!stage} liquify=${!!button} ring=${!!ring}`);
+
+  const neutral = await readBlob(await editor.export({ type: 'image/png', tileSize: 512 }));
+  button.click();
+  await settle(80);
+  out(`toggle: pressed=${button.getAttribute('aria-pressed')} root=${document.querySelector('#host .au-root').classList.contains('au-liquify')}`);
+  const rect = stage.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const pointer = (type, x, y) => stage.dispatchEvent(new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerId: 7,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: type === 'pointerup' ? 0 : 1,
+    clientX: x,
+    clientY: y,
+  }));
+
+  pointer('pointerdown', cx, cy);
+  for (let i = 1; i <= 8; i += 1) pointer('pointermove', cx + i * 10, cy);
+  pointer('pointerup', cx + 80, cy);
+  await settle(300);
+
+  const dabs = editor.getLiquify();
+  out(`stroke: dabs=${dabs.length} first=${dabs[0] ? dabs[0].dx.toFixed(3) : 'n/a'} radius=${dabs[0] ? dabs[0].radius.toFixed(3) : 'n/a'}`);
+  const pushed = await readBlob(await editor.export({ type: 'image/png', tileSize: 512 }));
+  const diff = psnr(pushed.data, neutral.data);
+  out(`stroke pixels: PSNR=${diff.psnr.toFixed(2)} dB max=${diff.max}`);
+
+  editor.undo();
+  await settle(250);
+  const undone = await readBlob(await editor.export({ type: 'image/png', tileSize: 512 }));
+  const undo = psnr(undone.data, neutral.data);
+  out(`undo: PSNR=${undo.psnr.toFixed(2)} dB max=${undo.max} dabs=${editor.getLiquify().length}`);
+
+  editor.showTab('crop');
+  await settle(80);
+  out(`tab out: pressed=${button.getAttribute('aria-pressed')} root=${document.querySelector('#host .au-root').classList.contains('au-liquify')}`);
+
+  out(dabs.length > 0 ? 'OK pointer produced dabs' : 'WARN no dabs');
+  out(diff.psnr < 40 ? 'OK pixels changed' : 'WARN pixels unchanged');
+  out(undo.psnr === Infinity ? 'OK undo through UI' : 'WARN undo differs');
+  out('done');
+  editor.destroy();
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+}
+</script>
+</body>
+</html>

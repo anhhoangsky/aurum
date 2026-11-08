@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aurum high-quality AI test</title>
+    <style>
+      html, body { margin: 0; background: #111; color: #eee; font: 13px/1.5 monospace; }
+      #log { white-space: pre-wrap; padding: 12px; }
+      canvas { display: block; margin: 12px; max-width: 90vw; height: auto; }
+    </style>
+  </head>
+  <body>
+    <pre id="log"></pre>
+    <script type="module">
+      import * as ai from '../dist/aurum-ai.esm.js';
+      const logEl = document.querySelector('#log');
+      const log = (message) => {
+        console.log(message);
+        logEl.textContent += `${message}\n`;
+      };
+      try {
+        const profile = await ai.probeAIClient();
+        log(`profile ${JSON.stringify(profile)}`);
+        const plan = ai.planRealESRGAN({
+          width: 128,
+          height: 128,
+          profile,
+          model: 'high',
+          tileSize: 128,
+          halo: 0,
+        });
+        log(`plan ${JSON.stringify(plan)}`);
+        const factory = ai.createRealESRGANFactory({
+          modelUrl: '../dist/ai/Real-ESRGAN-x4plus.onnx',
+          modelSizeMB: 67,
+          runtime: {
+            webgpu: '../dist/ai/ort.webgpu.bundle.min.mjs',
+            wasm: '../dist/ai/ort.wasm.bundle.min.mjs',
+          },
+          backend: plan.backend,
+          profile,
+          onStatus: log,
+        });
+        const adapter = await factory.load();
+        const loadStart = performance.now();
+        await adapter.load();
+        log(`loaded in ${Math.round(performance.now() - loadStart)} ms`);
+        const input = document.createElement('canvas');
+        input.width = 128;
+        input.height = 128;
+        const ctx = input.getContext('2d');
+        const gradient = ctx.createLinearGradient(0, 0, 128, 128);
+        gradient.addColorStop(0, '#123');
+        gradient.addColorStop(0.5, '#e8b');
+        gradient.addColorStop(1, '#2a4');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 128, 128);
+        ctx.fillStyle = '#fff';
+        ctx.font = '700 28px sans-serif';
+        ctx.fillText('AI', 30, 72);
+        const runStart = performance.now();
+        const output = await adapter.run(input);
+        log(`inference ${Math.round(performance.now() - runStart)} ms, out ${output.width}x${output.height}`);
+        document.body.append(output);
+        adapter.dispose();
+        window.__done = true;
+      } catch (error) {
+        log(`ERR ${error && error.stack ? error.stack : error}`);
+        window.__error = String(error);
+      }
+    </script>
+  </body>
+</html>

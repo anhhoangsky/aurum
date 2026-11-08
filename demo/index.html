@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#08080a" />
+    <meta
+      name="description"
+      content="Aurum — trình chỉnh ảnh web siêu nhẹ với headless core và giao diện iOS đen-vàng."
+    />
+    <title>Aurum — Web Image Editor</title>
+    <link rel="stylesheet" href="./demo.css" />
+  </head>
+  <body>
+    <main class="demo">
+      <aside class="intro">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true">A</span>
+          <span class="brand__name">Aurum</span>
+        </div>
+        <h1>Chỉnh ảnh.<br /><em>Không thừa một byte.</em></h1>
+        <p class="lede">
+          Headless core + giao diện iOS đen-vàng. WebGL, gesture physics và render
+          theo từng khung hình — gói lại trong một thư viện không dependency.
+        </p>
+        <div class="stats">
+          <div><b>28 KB</b><span>gzip</span></div>
+          <div><b>0</b><span>dependency</span></div>
+          <div><b>60–120</b><span>FPS</span></div>
+        </div>
+        <ul class="features">
+          <li>Cắt tự do, 1:1, 4:3, 16:9, màn hình; kéo 4 cạnh và 4 góc</li>
+          <li>Xoay tự do, xoay 90°, lật ngang/dọc</li>
+          <li>6 thông số màu + 7 bộ lọc, vignette</li>
+          <li>Undo/redo và state JSON không phá huỷ</li>
+          <li>Xuất full-resolution: Blob, DataURL, File, ImageData</li>
+        </ul>
+        <div class="samples">
+          <span>Thử với</span>
+          <button type="button" data-sample="landscape">ảnh ngang</button>
+          <button type="button" data-sample="portrait">ảnh dọc</button>
+        </div>
+        <p class="tip">Hoặc kéo &amp; thả ảnh của bạn vào khung bên cạnh.</p>
+        <footer>WebGL preview · Canvas2D fallback · <kbd>⌘Z</kbd> / <kbd>Ctrl Z</kbd></footer>
+      </aside>
+
+      <div class="device">
+        <div class="device__screen" id="editor"></div>
+      </div>
+    </main>
+
+    <div class="result" id="result" hidden>
+      <div class="result__card" role="dialog" aria-modal="true" aria-label="Ảnh đã xuất">
+        <div class="result__head">
+          <span>Đã xuất ảnh</span>
+          <button type="button" id="result-close" aria-label="Đóng">×</button>
+        </div>
+        <div class="result__preview"><img id="result-img" alt="Ảnh đã xuất" /></div>
+        <div class="result__meta" id="result-meta"></div>
+        <a class="result__btn" id="result-download" download>Tải xuống</a>
+      </div>
+    </div>
+
+    <script type="module" src="./demo.js"></script>
+  </body>
+</html>

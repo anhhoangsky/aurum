@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum shader fallback test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .host { width: 256px; height: 256px; position: relative; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div id="host" class="host"></div>
+<pre id="log">Running…</pre>
+<script type="module">
+import { createCore } from './dist/aurum.esm.js?v=20261102d';
+
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+let failures = 0;
+const pass = (s) => out(`PASS  ${s}`);
+const fail = (s) => { failures += 1; out(`FAIL  ${s}`); };
+window.addEventListener('error', (event) => fail(`window error: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  fail(`rejection: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+// Force a compile failure for a chosen variant without touching the library.
+// `getShaderParameter` is the only place the renderer reads COMPILE_STATUS.
+const proto = WebGLRenderingContext.prototype;
+const originalShaderSource = proto.shaderSource;
+const originalGetShaderParameter = proto.getShaderParameter;
+const originalGetShaderInfoLog = proto.getShaderInfoLog;
+let failMode = 'none';
+proto.shaderSource = function shaderSource(shader, source) {
+  const text = String(source);
+  if (
+    (failMode === 'beauty' && text.includes('#define AURUM_BEAUTY_MASK 1')) ||
+    (failMode === 'full' && text.includes('u_faceSlim'))
+  ) {
+    shader.__aurumForcedFailure = true;
+  }
+  return originalShaderSource.call(this, shader, source);
+};
+proto.getShaderParameter = function getShaderParameter(shader, pname) {
+  if (shader.__aurumForcedFailure && pname === this.COMPILE_STATUS) return false;
+  return originalGetShaderParameter.call(this, shader, pname);
+};
+proto.getShaderInfoLog = function getShaderInfoLog(shader) {
+  if (shader.__aurumForcedFailure) return 'forced compile failure for test';
+  return originalGetShaderInfoLog.call(this, shader);
+};
+
+const warnings = [];
+const originalWarn = console.warn.bind(console);
+console.warn = (...args) => {
+  warnings.push(args.map((value) => String(value)).join(' '));
+  originalWarn(...args);
+};
+
+function photoCanvas() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 256, 256);
+  gradient.addColorStop(0, '#0a1020');
+  gradient.addColorStop(0.5, '#b08060');
+  gradient.addColorStop(1, '#f5e6d0');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = '#c98f6b';
+  ctx.beginPath();
+  ctx.ellipse(128, 132, 60, 76, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Fine skin texture and a blemish, so smoothing/blemish actually change bytes.
+  for (let i = 0; i < 900; i += 1) {
+    const angle = i * 2.399963;
+    const radius = Math.sqrt((i % 233) / 233);
+    const x = 128 + Math.cos(angle) * radius * 54;
+    const y = 132 + Math.sin(angle) * radius * 68;
+    ctx.fillStyle = i % 3 === 0 ? 'rgba(255,240,225,0.55)' : 'rgba(80,45,35,0.45)';
+    ctx.fillRect(Math.round(x), Math.round(y), 2, 2);
+  }
+  ctx.fillStyle = '#5a2f28';
+  ctx.beginPath();
+  ctx.arc(142, 118, 5, 0, Math.PI * 2);
+  ctx.fill();
+  return canvas;
+}
+
+function miniMask() {
+  const width = 8;
+  const height = 8;
+  const data = new Uint8Array(width * height * 4);
+  for (let i = 0; i < width * height; i += 1) {
+    data[i * 4] = 220;
+    data[i * 4 + 1] = 20;
+    data[i * 4 + 2] = 40;
+    data[i * 4 + 3] = 255;
+  }
+  return { width, height, data };
+}
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  let sum = 0;
+  let sum2 = 0;
+  let n = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const v = data[i] + data[i + 1] + data[i + 2];
+    sum += v;
+    sum2 += v * v;
+    n += 1;
+  }
+  const mean = sum / n;
+  let hash = 2166136261;
+  for (let i = 0; i < data.length; i += 1) {
+    hash ^= data[i];
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return { variance: sum2 / n - mean * mean, mean, hash: hash.toString(16).padStart(8, '0') };
+}
+
+async function scenario(name, mode, expectedWarning) {
+  failMode = mode;
+  warnings.length = 0;
+  const host = document.getElementById('host');
+  host.innerHTML = '';
+  const core = createCore({
+    container: '#host',
+    image: photoCanvas(),
+    maxPreview: 256,
+    maxExport: 256,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  try {
+    await ready(core);
+    core.setFaces([{ x: 0.3, y: 0.25, w: 0.4, h: 0.5 }]);
+    core.setBeautyMask(miniMask());
+    core.setAdjust('smoothSkin', 60);
+    core.setAdjust('blemish', 40);
+    core.setAdjust('denoise', 60);
+    core.setAdjust('clarity', 50);
+    core.setAdjust('sharpen', 50);
+    core.renderNow();
+    const blob = await core.export({ type: 'image/png', tileSize: 256 });
+    const result = await readBlob(blob);
+    const warning = warnings.find((line) => line.includes(expectedWarning));
+    if (warning) pass(`${name}: fallback warning present`);
+    else fail(`${name}: missing warning "${expectedWarning}" (${warnings.join(' | ') || 'none'})`);
+    if (result.variance > 50) pass(`${name}: image still renders (variance=${result.variance.toFixed(1)})`);
+    else fail(`${name}: blank output (variance=${result.variance.toFixed(1)})`);
+    out(`      export mean=${result.mean.toFixed(1)} size=${blob.size} B hash=${result.hash}`);
+    return result;
+  } catch (error) {
+    fail(`${name}: threw ${error && error.stack ? error.stack : error}`);
+  } finally {
+    core.destroy();
+  }
+}
+
+try {
+  out('Scenario 1: Beauty variant compile failure -> base fallback');
+  const beautyResult = await scenario('beauty fallback', 'beauty', 'shader variant "beauty" unavailable');
+  out('');
+  out('Scenario 2: every full variant fails -> minimal fallback');
+  const minimalResult = await scenario('minimal fallback', 'full', 'shader variant "base-linear" unavailable');
+  if (beautyResult && minimalResult && beautyResult.hash !== minimalResult.hash) {
+    pass('base fallback and minimal fallback produce different images');
+  } else {
+    fail('base fallback and minimal fallback produced the same image');
+  }
+  failMode = 'none';
+  out('');
+  out(failures === 0 ? 'RESULT: PASS' : `RESULT: FAIL (${failures})`);
+  document.title = failures === 0 ? 'PASS shader fallback test' : `FAIL (${failures}) shader fallback test`;
+  window.__shaderFallbackTest = { done: true, failures };
+} catch (error) {
+  fail(error && error.stack ? error.stack : String(error));
+  out('');
+  out(`RESULT: FAIL (${failures})`);
+  document.title = 'FAIL shader fallback test';
+  window.__shaderFallbackTest = { done: true, failures };
+}
+</script>
+</body>
+</html>

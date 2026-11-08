@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum colour pipeline test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .hosts { display: flex; gap: 16px; flex-wrap: wrap; }
+  .host { width: 512px; height: 512px; position: relative; flex: 0 0 auto; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="hosts">
+  <div id="srgb" class="host"></div>
+  <div id="linear" class="host"></div>
+  <div id="parity" class="host"></div>
+</div>
+<pre id="log">Running…</pre>
+<script type="module">
+import { createCore } from './dist/aurum.esm.js?v=20261102d';
+
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+
+function photoCanvas(width = 512, height = 512) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, width, height);
+  g.addColorStop(0, '#05070c');
+  g.addColorStop(0.35, '#26384f');
+  g.addColorStop(0.7, '#c9a47a');
+  g.addColorStop(1, '#fff3dc');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, width, height);
+  const patches = [
+    ['#c98f6b', 40, 340, 150, 120], // skin
+    ['#7da7c9', 220, 60, 130, 100], // sky
+    ['#4d7a45', 360, 300, 120, 130], // foliage
+    ['#b33a32', 60, 100, 90, 90],   // red
+    ['#f2e8d6', 250, 380, 110, 90], // highlight
+    ['#0b0b0d', 390, 120, 90, 90],  // shadow
+  ];
+  for (const [colour, x, y, w, h] of patches) {
+    ctx.fillStyle = colour;
+    ctx.fillRect(x, y, w, h);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.beginPath();
+  ctx.arc(300, 220, 46, 0, Math.PI * 2);
+  ctx.fill();
+  return canvas;
+}
+
+function gradientCanvas(width = 512, height = 128) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(width, height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      // Quarter-tone ramp: the region where 8-bit banding is most visible.
+      const v = Math.round((x / (width - 1)) * 64);
+      const at = (y * width + x) * 4;
+      image.data[at] = v;
+      image.data[at + 1] = v;
+      image.data[at + 2] = v;
+      image.data[at + 3] = 255;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  return canvas;
+}
+
+function fullRampCanvas(width = 512, height = 512) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(width, height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const v = Math.round((x / (width - 1)) * 255);
+      const at = (y * width + x) * 4;
+      image.data[at] = v;
+      image.data[at + 1] = v;
+      image.data[at + 2] = v;
+      image.data[at + 3] = 255;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  return canvas;
+}
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+
+const frames = (n = 3) => new Promise((resolve) => {
+  // Timers instead of rAF: rAF pauses when the tab is not frontmost, which
+  // used to make this page stall forever during automated checks.
+  const step = () => (n-- <= 0 ? resolve() : setTimeout(step, 16));
+  setTimeout(step, 16);
+});
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function readCanvas(canvas) {
+  const copy = document.createElement('canvas');
+  copy.width = canvas.width;
+  copy.height = canvas.height;
+  const ctx = copy.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(canvas, 0, 0);
+  return { width: copy.width, height: copy.height, data: ctx.getImageData(0, 0, copy.width, copy.height).data };
+}
+
+/*
+ * Read the WebGL buffer right after a forced render. `core.renderNow()` is
+ * synchronous, so this works even when the tab is backgrounded (rAF would not
+ * fire). Reading later is unreliable because the default drawing buffer is
+ * cleared after compositing (preserveDrawingBuffer: false).
+ */
+function captureGL(core) {
+  core.setPreviewQuality('high');
+  core.renderNow();
+  const gl = core.canvas.getContext('webgl');
+  if (!gl) return null;
+  const width = gl.drawingBufferWidth;
+  const height = gl.drawingBufferHeight;
+  const raw = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    data.set(raw.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
+  }
+  return { width, height, data };
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 4) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = a[i + k] - b[i + k];
+      sum += d * d;
+      max = Math.max(max, Math.abs(d));
+    }
+  }
+  const mse = sum / (n * 0.75);
+  return { mse, max, psnr: mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse) };
+}
+
+function mean(data) {
+  let r = 0, g = 0, b = 0;
+  const n = data.length / 4;
+  for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i + 1]; b += data[i + 2]; }
+  return [r / n, g / n, b / n].map((v) => v.toFixed(2)).join(',');
+}
+
+function rowStats(data, width, height) {
+  const y = height >> 1;
+  const values = [];
+  const counts = new Map();
+  for (let x = 0; x < width; x += 1) {
+    const v = data[(y * width + x) * 4];
+    values.push(v);
+    counts.set(v, (counts.get(v) || 0) + 1);
+  }
+  let maxRun = 1;
+  let run = 1;
+  for (let i = 1; i < values.length; i += 1) {
+    if (values[i] === values[i - 1]) { run += 1; maxRun = Math.max(maxRun, run); }
+    else run = 1;
+  }
+  return { unique: counts.size, maxRun };
+}
+
+function applyLook(core) {
+  const values = {
+    exposure: 45,
+    highlights: -55,
+    shadows: 45,
+    whites: 12,
+    blacks: -10,
+    warmth: 18,
+    tint: 6,
+    contrast: 12,
+    saturation: 16,
+    vibrance: 22,
+    gamma: 4,
+    clarity: 14,
+    sharpen: 16,
+    denoise: 18,
+  };
+  for (const [key, value] of Object.entries(values)) core.setAdjust(key, value);
+}
+
+try {
+  const image = photoCanvas();
+  const srgb = createCore({
+    container: '#srgb',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'srgb',
+    dither: false,
+  });
+  const linear = createCore({
+    container: '#linear',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await Promise.all([ready(srgb), ready(linear)]);
+  out(`accelerated: srgb=${srgb.accelerated} linear=${linear.accelerated}`);
+  out(`resolved: srgb=${srgb.colorSpace} linear=${linear.colorSpace}`);
+  out(`capabilities: tier=${srgb.capabilities.tier} webgl=${srgb.capabilities.webgl} highp=${srgb.capabilities.highp} maxTexture=${srgb.capabilities.maxTexture}`);
+
+  applyLook(srgb);
+  applyLook(linear);
+  await frames(4);
+
+  const srgbExport = await readBlob(await srgb.export({ type: 'image/png', tileSize: 512 }));
+  const linearExport = await readBlob(await linear.export({ type: 'image/png', tileSize: 512 }));
+  out(`export size: srgb=${srgbExport.width}x${srgbExport.height} linear=${linearExport.width}x${linearExport.height}`);
+  out(`mean RGB: srgb=${mean(srgbExport.data)} linear=${mean(linearExport.data)}`);
+  const diff = psnr(srgbExport.data, linearExport.data);
+  out(`srgb vs linear: PSNR=${diff.psnr.toFixed(2)} dB max=${diff.max} mse=${diff.mse.toFixed(2)}`);
+
+  // Preview/export parity with a neutral look (no spatial taps and no dither).
+  const parity = createCore({
+    container: '#parity',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await ready(parity);
+  parity.setAspect('1:1');
+  parity.setResultMode(true);
+  await frames(4);
+  const preview = await captureGL(parity);
+  const parityExport = await readBlob(await parity.export({ type: 'image/png', tileSize: 512 }));
+  out(`parity size: preview=${preview.width}x${preview.height} export=${parityExport.width}x${parityExport.height}`);
+  if (preview && preview.width === parityExport.width && preview.height === parityExport.height) {
+    out(`parity means: preview=${mean(preview.data)} export=${mean(parityExport.data)}`);
+    const p = psnr(preview.data, parityExport.data);
+    out(`preview vs export: PSNR=${p.psnr.toFixed(2)} dB max=${p.max}`);
+  } else {
+    out('preview vs export: size mismatch');
+  }
+
+  // Banding on a 64-step quarter-tone ramp, with dither off.
+  const gradient = gradientCanvas();
+  const gS = createCore({ container: document.body.appendChild(Object.assign(document.createElement('div'), { className: 'host' })), image: gradient, maxPreview: 512, maxExport: 512, colorSpace: 'srgb', dither: false });
+  const gL = createCore({ container: document.body.appendChild(Object.assign(document.createElement('div'), { className: 'host' })), image: gradient, maxPreview: 512, maxExport: 512, colorSpace: 'linear', dither: false });
+  await Promise.all([ready(gS), ready(gL)]);
+  gS.setCrop({ aspect: 'free', ratio: 4 });
+  gL.setCrop({ aspect: 'free', ratio: 4 });
+  await frames(4);
+  const gs = await readBlob(await gS.export({ type: 'image/png', tileSize: 512 }));
+  const gl = await readBlob(await gL.export({ type: 'image/png', tileSize: 512 }));
+  out(`ramp without dither: srgb=${JSON.stringify(rowStats(gs.data, gs.width, gs.height))} linear=${JSON.stringify(rowStats(gl.data, gl.width, gl.height))}`);
+
+  // Dither check: compress a full 256-level ramp into roughly 40 output
+  // codes. Without dither each code forms a long flat run; ordered dither
+  // breaks those runs into alternating neighbours, which removes the visible
+  // step while keeping the average value unchanged.
+  const ramp = fullRampCanvas();
+  const dCore = createCore({
+    container: document.body.appendChild(Object.assign(document.createElement('div'), { className: 'host' })),
+    image: ramp,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await ready(dCore);
+  dCore.setAdjust('contrast', -85);
+  await frames(4);
+  const dOff = await readBlob(await dCore.export({ type: 'image/png', tileSize: 512 }));
+  const offStats = rowStats(dOff.data, dOff.width, dOff.height);
+  dCore.setDither(true);
+  await frames(4);
+  const dOn = await readBlob(await dCore.export({ type: 'image/png', tileSize: 512 }));
+  const onStats = rowStats(dOn.data, dOn.width, dOn.height);
+  out(`dither ramp off: ${JSON.stringify(offStats)}`);
+  out(`dither ramp on:  ${JSON.stringify(onStats)}`);
+  out(`dither max run: ${offStats.maxRun} -> ${onStats.maxRun}`);
+
+  // Identity check: with no adjustments the two pipelines must round-trip to
+  // the same image (up to 8-bit rounding).
+  srgb.resetAdjustments();
+  linear.resetAdjustments();
+  await frames(4);
+  const s0 = await readBlob(await srgb.export({ type: 'image/png', tileSize: 512 }));
+  const l0 = await readBlob(await linear.export({ type: 'image/png', tileSize: 512 }));
+  const d0 = psnr(s0.data, l0.data);
+  out(`neutral srgb vs linear: PSNR=${d0.psnr.toFixed(2)} dB max=${d0.max} mse=${d0.mse.toFixed(3)}`);
+
+  out('done');
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+}
+</script>
+</body>
+</html>

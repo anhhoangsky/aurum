@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum AI halo comparison</title>
+<style>body{font:13px/1.5 ui-monospace,monospace;background:#111;color:#eee;padding:20px}pre{white-space:pre-wrap}</style>
+</head>
+<body>
+<pre id="log">loading…</pre>
+<script type="module">
+const logEl = document.getElementById('log');
+const lines = [];
+const log = (m) => { lines.push(m); logEl.textContent = lines.join('\n'); console.log(m); };
+window.__result = { status: 'running', lines };
+try {
+  const { runAIPipeline } = await import('./dist/aurum.esm.js?v=20261102d');
+  const { probeAIClient, createRealESRGANFactory } = await import('./dist/aurum-ai.esm.js?v=20261102d');
+  const profile = await probeAIClient();
+  const backend = new URLSearchParams(location.search).get('backend') || 'webgpu';
+  const source = document.createElement('canvas');
+  source.width = 128; source.height = 96;
+  const sctx = source.getContext('2d');
+  for (let y = 0; y < 96; y += 1) for (let x = 0; x < 128; x += 1) {
+    const r = Math.round((x / 127) * 255);
+    const g = Math.round((y / 95) * 255);
+    const b = ((x >> 2) + (y >> 2)) % 2 ? 220 : 30;
+    sctx.fillStyle = `rgb(${r},${g},${b})`; sctx.fillRect(x, y, 1, 1);
+  }
+  const opts = {
+    modelUrl: new URL('./dist/ai/realesr-general-x4v3.onnx', location.href).href,
+    runtime: {
+      webgpu: new URL('./dist/ai/ort.webgpu.bundle.min.mjs', location.href).href,
+      wasm: new URL('./dist/ai/ort.wasm.bundle.min.mjs', location.href).href,
+    },
+    backend,
+    profile,
+  };
+  const factory = createRealESRGANFactory(opts);
+  const fullAdapter = await factory.load();
+  await fullAdapter.load();
+  const t0 = performance.now();
+  const full = await fullAdapter.run(source);
+  log(`full: ${(performance.now() - t0).toFixed(0)} ms ${full.width}x${full.height}`);
+  fullAdapter.dispose();
+  const t1 = performance.now();
+  const tiled = await runAIPipeline(await factory.load(), source, {
+    tileSize: 64, halo: 40, scale: 4,
+  });
+  log(`tiled: ${(performance.now() - t1).toFixed(0)} ms ${tiled.width}x${tiled.height}`);
+  const a = full.getContext('2d').getImageData(0, 0, full.width, full.height).data;
+  const b = tiled.getContext('2d').getImageData(0, 0, tiled.width, tiled.height).data;
+  let maxAll = 0, sumAll = 0, nAll = 0, maxIn = 0, sumIn = 0, nIn = 0, over = 0;
+  const border = 160;
+  for (let y = 0; y < full.height; y += 1) for (let x = 0; x < full.width; x += 1) {
+    const i = (y * full.width + x) * 4;
+    for (let c = 0; c < 3; c += 1) {
+      const d = Math.abs(a[i + c] - b[i + c]);
+      if (d > maxAll) maxAll = d;
+      sumAll += d; nAll += 1;
+      if (d > 1) over += 1;
+      if (x >= border && x < full.width - border && y >= border && y < full.height - border) {
+        if (d > maxIn) maxIn = d;
+        sumIn += d; nIn += 1;
+      }
+    }
+  }
+  log(`all: max=${maxAll} mean=${(sumAll / nAll).toFixed(4)} over1=${over}`);
+  log(`interior: max=${maxIn} mean=${(sumIn / nIn).toFixed(5)}`);
+  window.__result = { status: 'ok', maxAll, meanAll: sumAll / nAll, maxIn, meanIn: sumIn / nIn, over, lines };
+  log('OK');
+} catch (error) {
+  const text = error && error.stack ? error.stack : String(error);
+  window.__result = { status: 'failed', error: text, lines };
+  log('FAILED: ' + text);
+}
+</script>
+</body>
+</html>

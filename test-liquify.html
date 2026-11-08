@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum liquify test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .hosts { display: flex; gap: 16px; flex-wrap: wrap; }
+  .host { width: 512px; height: 512px; position: relative; flex: 0 0 auto; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="hosts"><div id="main" class="host"></div></div>
+<pre id="log">Running…</pre>
+<script type="module">
+import {
+  createCore,
+  normalizeState,
+  buildLiquifyField,
+  MAX_LIQUIFY_DABS,
+} from './dist/aurum.esm.js?v=20261102d';
+
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+const W = 512;
+const H = 512;
+const BAR = 0.60;
+
+function sourceCanvas() {
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1d2a33';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#6f6330';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= W; i += 16) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i, H);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i);
+    ctx.lineTo(W, i);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#c98f6b';
+  ctx.beginPath();
+  ctx.ellipse(W * 0.5, H * 0.5, W * 0.18, H * 0.22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Draw the bar on top of the face so its motion is measurable.
+  ctx.fillStyle = '#ff2020';
+  ctx.fillRect(Math.round(BAR * W) - 4, 180, 8, 152);
+  return canvas;
+}
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+const settle = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 4) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = a[i + k] - b[i + k];
+      sum += d * d;
+      max = Math.max(max, Math.abs(d));
+    }
+  }
+  const mse = sum / (n * 0.75);
+  return { mse, max, psnr: mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse) };
+}
+
+function regionDiff(a, b, u0, v0, u1, v1) {
+  const x0 = Math.round(u0 * a.width);
+  const x1 = Math.round(u1 * a.width);
+  const y0 = Math.round(v0 * a.height);
+  const y1 = Math.round(v1 * a.height);
+  let sum = 0;
+  let count = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const at = (y * a.width + x) * 4;
+      sum += (Math.abs(a.data[at] - b.data[at]) +
+        Math.abs(a.data[at + 1] - b.data[at + 1]) +
+        Math.abs(a.data[at + 2] - b.data[at + 2])) / 3;
+      count += 1;
+    }
+  }
+  return sum / Math.max(1, count);
+}
+
+function redCenter(image) {
+  const y = Math.round(image.height * 0.5);
+  let bestX = -1;
+  let best = -1;
+  for (let x = 0; x < image.width; x += 1) {
+    const at = (y * image.width + x) * 4;
+    const score = image.data[at] - (image.data[at + 1] + image.data[at + 2]) / 2;
+    if (score > best) {
+      best = score;
+      bestX = x;
+    }
+  }
+  return { x: bestX, score: best };
+}
+
+function captureGL(core) {
+  core.setPreviewQuality('high');
+  core.renderNow();
+  const gl = core.canvas.getContext('webgl');
+  if (!gl) return null;
+  const width = gl.drawingBufferWidth;
+  const height = gl.drawingBufferHeight;
+  const raw = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    data.set(raw.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
+  }
+  return { width, height, data };
+}
+
+async function exportNow(core) {
+  core.renderNow();
+  return readBlob(await core.export({ type: 'image/png', tileSize: 512 }));
+}
+
+try {
+  const image = sourceCanvas();
+  const core = createCore({
+    container: '#main',
+    image,
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await ready(core);
+  core.setResultMode(true);
+  await settle();
+
+  const neutral = await exportNow(core);
+  const neutralRed = redCenter(neutral);
+  out(`neutral: red centre x=${neutralRed.x} score=${neutralRed.score.toFixed(1)}`);
+
+  // State round-trip: the dab survives JSON, malformed entries are dropped,
+  // and the count is capped.
+  const restored = normalizeState({
+    retouch: {
+      liquify: [
+        { x: 0.5, y: 0.5, dx: 0.08, dy: 0.01, radius: 0.12 },
+        { x: 'bad', y: 0.2, dx: 0, dy: 0, radius: 0.1 },
+      ],
+    },
+  });
+  out(`normalize keeps ${restored.retouch.liquify.length} dab (want 1)`);
+  const roundTrip = normalizeState(JSON.parse(JSON.stringify(restored)));
+  out(`state round-trip ${roundTrip.retouch.liquify.length} dab (want 1)`);
+  const fieldProbe = buildLiquifyField(restored.retouch.liquify, 512, 512);
+  out(`field ${fieldProbe.width}x${fieldProbe.height} shift=${fieldProbe.shift.toFixed(4)} (want 64x64)`);
+  const tooMany = normalizeState({
+    retouch: { liquify: Array.from({ length: MAX_LIQUIFY_DABS + 50 }, () => ({ x: 0.5, y: 0.5, dx: 0.01, dy: 0, radius: 0.1 })) },
+  });
+  out(`dab cap ${tooMany.retouch.liquify.length} (want ${MAX_LIQUIFY_DABS})`);
+
+  // One strong dab at the centre pushes x samples to the right, so the red
+  // bar at 60% appears closer to the middle.
+  core.addLiquifyDab({ x: 0.5, y: 0.5, dx: 0.08, dy: 0, radius: 0.16 }, 'test');
+  await settle(200);
+  const liveField = buildLiquifyField(core.getLiquify(), 512, 512);
+  const fieldAt = (u, v) => {
+    const x = Math.min(liveField.width - 1, Math.max(0, Math.round(u * liveField.width - 0.5)));
+    const y = Math.min(liveField.height - 1, Math.max(0, Math.round(v * liveField.height - 0.5)));
+    const at = (y * liveField.width + x) * 4;
+    return [
+      ((liveField.data[at] - 128) / 127) * liveField.shift,
+      ((liveField.data[at + 1] - 128) / 127) * liveField.shift,
+    ];
+  };
+  out(`field sample centre=${fieldAt(0.5, 0.5).map((n) => n.toFixed(4))} corner=${fieldAt(0.05, 0.05).map((n) => n.toFixed(4))}`);
+  const pushed = await exportNow(core);
+  const pushedRed = redCenter(pushed);
+  const centerDiff = regionDiff(pushed, neutral, 0.45, 0.45, 0.55, 0.55);
+  const outsideDiff = regionDiff(pushed, neutral, 0.02, 0.02, 0.12, 0.12);
+  out(`dab: red centre x=${pushedRed.x} (neutral ${neutralRed.x})`);
+  out(`dab: centre diff=${centerDiff.toFixed(2)} outside diff=${outsideDiff.toFixed(3)}`);
+  out(`dab: field count=${core.getLiquify().length}`);
+
+  const preview = captureGL(core);
+  const parity = await exportNow(core);
+  if (preview && preview.width === parity.width && preview.height === parity.height) {
+    const p = psnr(preview.data, parity.data);
+    out(`preview vs export: PSNR=${p.psnr.toFixed(2)} dB max=${p.max}`);
+  } else {
+    out(`preview vs export size mismatch ${preview && preview.width}x${preview && preview.height} vs ${parity.width}x${parity.height}`);
+  }
+
+  core.undo();
+  await settle(200);
+  const undone = await exportNow(core);
+  const undoDiff = psnr(undone.data, neutral.data);
+  out(`undo: PSNR=${undoDiff.psnr.toFixed(2)} dB max=${undoDiff.max} dabs=${core.getLiquify().length}`);
+
+  core.addLiquifyDab({ x: 0.5, y: 0.5, dx: -0.07, dy: 0.01, radius: 0.1 }, 'test2');
+  await settle(150);
+  core.clearLiquify();
+  await settle(150);
+  const cleared = await exportNow(core);
+  const clearDiff = psnr(cleared.data, neutral.data);
+  out(`clear: PSNR=${clearDiff.psnr.toFixed(2)} dB max=${clearDiff.max} dabs=${core.getLiquify().length}`);
+
+  out(pushedRed.x < neutralRed.x ? 'OK displacement direction' : 'WARN displacement direction');
+  out(outsideDiff < 0.05 ? 'OK outside brush untouched' : 'WARN outside brush changed');
+  out(undoDiff.psnr === Infinity ? 'OK undo restores pixels' : 'WARN undo differs');
+  out(clearDiff.psnr === Infinity ? 'OK clear restores pixels' : 'WARN clear differs');
+  out('done');
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum AI pipeline test</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, monospace; background: #111; color: #eee; padding: 20px; }
+  pre { white-space: pre-wrap; }
+  canvas { image-rendering: pixelated; max-width: 100%; border: 1px solid #444; }
+</style>
+</head>
+<body>
+<pre id="log">loading…</pre>
+<div id="out"></div>
+<script type="module">
+const logEl = document.getElementById('log');
+const lines = [];
+const log = (m) => {
+  lines.push(m);
+  logEl.textContent = lines.join('\n');
+  console.log(m);
+};
+window.__result = { status: 'running', lines };
+try {
+  const params = new URLSearchParams(location.search);
+  const backend = params.get('backend') || 'auto';
+  const { runAIPipeline } = await import('./dist/aurum.esm.js?v=20261102d');
+  const { probeAIClient, planRealESRGAN, createRealESRGANFactory } = await import('./dist/aurum-ai.esm.js?v=20261102d');
+  const t0 = performance.now();
+  const profile = await probeAIClient();
+  log(`probe: ${(performance.now() - t0).toFixed(0)} ms`);
+  log(`profile: ${JSON.stringify(profile)}`);
+  const plan = planRealESRGAN({
+    width: 128,
+    height: 96,
+    profile,
+    tileSize: 64,
+    maxInputPixels: 1_000_000,
+    maxOutputPixels: 1_000_000,
+  });
+  log(`plan: ${JSON.stringify(plan)}`);
+  const source = document.createElement('canvas');
+  source.width = 128;
+  source.height = 96;
+  const sctx = source.getContext('2d');
+  for (let y = 0; y < 96; y += 1) {
+    for (let x = 0; x < 128; x += 1) {
+      const r = Math.round((x / 127) * 255);
+      const g = Math.round((y / 95) * 255);
+      const b = ((x >> 3) + (y >> 3)) % 2 ? 200 : 40;
+      sctx.fillStyle = `rgb(${r},${g},${b})`;
+      sctx.fillRect(x, y, 1, 1);
+    }
+  }
+  const factory = createRealESRGANFactory({
+    modelUrl: new URL('./dist/ai/realesr-general-x4v3.onnx', location.href).href,
+    runtime: {
+      webgpu: new URL('./dist/ai/ort.webgpu.bundle.min.mjs', location.href).href,
+      wasm: new URL('./dist/ai/ort.wasm.bundle.min.mjs', location.href).href,
+    },
+    backend: backend === 'auto' ? undefined : backend,
+    profile,
+    onStatus: (m) => log(`status: ${m}`),
+  });
+  const adapter = await factory.load();
+  const t1 = performance.now();
+  const out = await runAIPipeline(adapter, source, {
+    tileSize: plan.tileSize,
+    halo: plan.halo,
+    scale: plan.scale,
+    maxInputPixels: plan.maxInputPixels,
+    maxOutputPixels: plan.maxOutputPixels,
+    onProgress: (p) => log(`progress: ${(p * 100).toFixed(0)}%`),
+    onStage: (stage, done, total) => log(`stage: ${stage}${done != null ? ` ${done}/${total}` : ''}`),
+  });
+  const elapsed = performance.now() - t1;
+  log(`pipeline: ${elapsed.toFixed(0)} ms -> ${out.width}x${out.height}`);
+  const ctx = out.getContext('2d');
+  const data = ctx.getImageData(0, 0, out.width, out.height).data;
+  let min = 255, max = 0, sum = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const v = data[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+  }
+  log(`output red: min=${min} max=${max} mean=${(sum / (data.length / 4)).toFixed(1)}`);
+  document.getElementById('out').appendChild(out);
+  window.__result = { status: 'ok', elapsed, width: out.width, height: out.height, lines };
+  log('OK');
+} catch (error) {
+  const text = error && error.stack ? error.stack : String(error);
+  window.__result = { status: 'failed', error: text, lines };
+  log('FAILED: ' + text);
+}
+</script>
+</body>
+</html>

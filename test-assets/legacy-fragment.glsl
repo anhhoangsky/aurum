@@ -1,0 +1,576 @@
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+uniform sampler2D u_texture;
+uniform sampler2D u_curve;
+uniform sampler2D u_lut;
+uniform sampler2D u_mask;
+uniform sampler2D u_liquify;
+uniform float u_liquifyShift;
+uniform mat3 u_color;
+uniform vec3 u_offset;
+uniform float u_vignette;
+uniform float u_aspect;
+uniform vec2 u_vigCenter;
+uniform vec2 u_vigHalf;
+uniform vec2 u_texel;
+uniform float u_linear;
+uniform float u_dither;
+
+uniform float u_exposure;
+uniform float u_brightness;
+uniform float u_contrast;
+uniform float u_saturation;
+uniform float u_highlights;
+uniform float u_shadows;
+uniform float u_whites;
+uniform float u_blacks;
+uniform float u_warmth;
+uniform float u_tint;
+uniform float u_vibrance;
+uniform float u_gamma;
+uniform float u_clarity;
+uniform float u_sharpen;
+uniform float u_denoise;
+uniform float u_smoothSkin;
+uniform float u_blemish;
+uniform float u_skinTexture;
+uniform float u_skinTone;
+uniform float u_hasMask;
+uniform float u_hasCurve;
+uniform float u_lutStrength;
+uniform float u_lutSize;
+uniform float u_quality;
+uniform vec4 u_faces[4];
+uniform int u_faceCount;
+uniform sampler2D u_anchors;
+uniform float u_hasAnchors;
+uniform vec3 u_hsl[8];
+uniform float u_faceSlim;
+uniform float u_jawline;
+uniform float u_chin;
+uniform float u_eyeSize;
+uniform float u_noseSize;
+uniform float u_mouthSize;
+
+varying vec2 v_uv;
+varying vec2 v_screen;
+
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+/*
+ * Exact sRGB transfer functions. An 8-bit transfer LUT is tempting, but it
+ * quantises linear values below 1/255 to zero, which destroys shadow detail
+ * (a 64-step ramp collapsed to 14 levels in testing). highp is guaranteed
+ * whenever the linear path is enabled, so the pow-based curves are exact.
+ */
+float srgbToLinear1(float v) {
+  v = clamp(v, 0.0, 1.0);
+  return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+}
+
+float linearToSrgb1(float v) {
+  v = clamp(v, 0.0, 1.0);
+  return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+vec3 toLinear(vec3 c) {
+  return vec3(srgbToLinear1(c.r), srgbToLinear1(c.g), srgbToLinear1(c.b));
+}
+
+vec3 toSrgb(vec3 c) {
+  return vec3(linearToSrgb1(c.r), linearToSrgb1(c.g), linearToSrgb1(c.b));
+}
+
+/*
+ * Face geometry is a UV-space inverse warp, so the preview and every export
+ * tile evaluate exactly the same displacement. Server face boxes are enough
+ * for the coarse face/jaw/chin sliders; eye/nose/mouth use face-relative
+ * anchors until the optional landmark adapter supplies precise points.
+ * Positive values: slim face/jaw, lengthen chin, enlarge eyes/nose/mouth.
+ */
+vec2 warpFace(vec2 uv) {
+  /* Free liquify runs first: its field is a source-UV displacement, so the
+     same dab moves the same detail in the preview and every export tile. */
+  if (u_liquifyShift > 0.00001) {
+    vec2 pushed = (texture2D(u_liquify, uv).rg * 255.0 - 128.0) * (u_liquifyShift / 127.0);
+    uv = clamp(uv + pushed, 0.0, 1.0);
+  }
+  if (
+    abs(u_faceSlim) + abs(u_jawline) + abs(u_chin) +
+    abs(u_eyeSize) + abs(u_noseSize) + abs(u_mouthSize) < 0.001
+  ) return uv;
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_faceCount) break;
+    // u_faces packs [cx, cy, 0.62*w, 0.72*h], so recover the box half-size.
+    vec4 f = u_faces[i];
+    vec2 halfSize = max(f.zw / vec2(1.24, 1.44), vec2(0.0001));
+    vec2 center = f.xy;
+    vec2 l = (uv - center) / halfSize;
+    float ell = clamp(1.0 - dot(l, l), 0.0, 1.0);
+    if (ell <= 0.0001) continue;
+    float soft = ell * ell;
+
+    /*
+     * Feature anchors default to face-relative positions. When the optional
+     * landmark pass has run, a 4x4 RGBA8 texture replaces them with measured
+     * eye/nose/mouth points and radii. The branch is uniform across the draw,
+     * so devices without landmarks pay only for the default constants.
+     */
+    vec2 eyeL = vec2(-0.34, -0.18);
+    vec2 eyeR = vec2(0.34, -0.18);
+    vec2 nose = vec2(0.0, 0.10);
+    vec2 mouth = vec2(0.0, 0.40);
+    vec2 eyeLR = vec2(0.22, 0.16);
+    vec2 eyeRR = vec2(0.22, 0.16);
+    vec2 noseR = vec2(0.20, 0.24);
+    vec2 mouthR = vec2(0.30, 0.16);
+    if (u_hasAnchors > 0.5) {
+      float ay = (float(i) + 0.5) * 0.25;
+      vec4 a0 = texture2D(u_anchors, vec2(0.125, ay));
+      vec4 a1 = texture2D(u_anchors, vec2(0.375, ay));
+      vec4 a2 = texture2D(u_anchors, vec2(0.625, ay));
+      vec4 a3 = texture2D(u_anchors, vec2(0.875, ay));
+      eyeL = a0.xy * 2.0 - 1.0;
+      eyeR = a0.zw * 2.0 - 1.0;
+      nose = a1.xy * 2.0 - 1.0;
+      mouth = a1.zw * 2.0 - 1.0;
+      eyeLR = max(a2.xy * 0.6, vec2(0.02));
+      eyeRR = max(a2.zw * 0.6, vec2(0.02));
+      noseR = max(a3.xy * 0.6, vec2(0.02));
+      mouthR = max(a3.zw * 0.6, vec2(0.02));
+    }
+
+    // Horizontal squeeze: zero at the centre and at the face edge, strongest
+    // across the cheeks. Jawline weights the lower half more.
+    float squeeze =
+      u_faceSlim * 0.16 +
+      u_jawline * 0.14 * smoothstep(-0.05, 0.75, l.y);
+    uv.x += squeeze * l.x * soft * halfSize.x;
+
+    // Chin: the lower centre samples slightly above, so the chin visually
+    // extends downwards without pulling in the background at the jaw edge.
+    float chinBand = smoothstep(0.0, 0.65, l.y) * exp(-l.x * l.x * 3.0);
+    uv.y -= u_chin * 0.14 * chinBand * ell * halfSize.y;
+
+    if (abs(u_eyeSize) > 0.001) {
+      vec2 dL = (l - eyeL) / eyeLR;
+      vec2 dR = (l - eyeR) / eyeRR;
+      float fL = clamp(1.0 - dot(dL, dL), 0.0, 1.0);
+      float fR = clamp(1.0 - dot(dR, dR), 0.0, 1.0);
+      fL *= fL;
+      fR *= fR;
+      uv -= (uv - (center + eyeL * halfSize)) * u_eyeSize * 0.28 * fL;
+      uv -= (uv - (center + eyeR * halfSize)) * u_eyeSize * 0.28 * fR;
+    }
+
+    if (abs(u_noseSize) > 0.001) {
+      vec2 dN = (l - nose) / noseR;
+      float fN = clamp(1.0 - dot(dN, dN), 0.0, 1.0);
+      fN *= fN;
+      uv -= (uv - (center + nose * halfSize)) * u_noseSize * 0.26 * fN;
+    }
+
+    if (abs(u_mouthSize) > 0.001) {
+      vec2 dM = (l - mouth) / mouthR;
+      float fM = clamp(1.0 - dot(dM, dM), 0.0, 1.0);
+      fM *= fM;
+      uv -= (uv - (center + mouth * halfSize)) * u_mouthSize * 0.24 * fM;
+    }
+  }
+  return clamp(uv, 0.0, 1.0);
+}
+
+vec3 whiteBalance() {
+  return vec3(
+    1.0 + u_warmth * 0.16 + u_tint * 0.04,
+    1.0 + u_warmth * 0.03 - u_tint * 0.18,
+    1.0 - u_warmth * 0.16 + u_tint * 0.04
+  );
+}
+
+/* Perceptual 4x4 ordered dither; two compact 2x2 evaluations. */
+float bayer2(vec2 a) {
+  a = floor(a);
+  return fract(a.x * 0.5 + a.y * a.y * 0.75);
+}
+
+float bayer4(vec2 a) {
+  return bayer2(0.5 * a) * 0.25 + bayer2(a);
+}
+
+/*
+ * Gamma-space tonal block kept for the legacy sRGB path. It is byte-for-byte
+ * the same formula the editor used before the linear pipeline existed.
+ */
+vec3 toneGamma(vec3 c) {
+  float lc = luma(clamp(c, 0.0, 1.0));
+  if (abs(u_highlights) > 0.001) {
+    float m = smoothstep(0.42, 1.0, lc);
+    c += u_highlights * m * (u_highlights > 0.0 ? (1.0 - c) : c) * 0.6;
+  }
+  if (abs(u_shadows) > 0.001) {
+    float m = 1.0 - smoothstep(0.0, 0.58, lc);
+    c += u_shadows * m * (u_shadows > 0.0 ? (1.0 - c) : c) * 0.6;
+  }
+  if (abs(u_whites) > 0.001 || abs(u_blacks) > 0.001) {
+    float black = -u_blacks * 0.16;
+    float white = 1.0 - u_whites * 0.16;
+    c = (c - black) / max(0.08, white - black);
+  }
+  return clamp(c, 0.0, 1.0);
+}
+
+/*
+ * Linear-light tonal block. The tone curve is evaluated on perceptual luma
+ * (the same place the sliders have always operated) and then applied as a
+ * luminance gain. Doing it per channel would desaturate shadows because a
+ * linear offset of 0.1 is a huge perceptual lift.
+ */
+vec3 toneLinear(vec3 c) {
+  c = clamp(c, 0.0, 1.0);
+  float lc = luma(c);
+  if (lc < 0.000001) return c;
+  float lp = linearToSrgb1(lc);
+  float t = lp;
+  if (abs(u_highlights) > 0.001) {
+    float m = smoothstep(0.42, 1.0, lp);
+    t += u_highlights * m * (u_highlights > 0.0 ? (1.0 - lp) : lp) * 0.6;
+  }
+  if (abs(u_shadows) > 0.001) {
+    float m = 1.0 - smoothstep(0.0, 0.58, lp);
+    t += u_shadows * m * (u_shadows > 0.0 ? (1.0 - lp) : lp) * 0.6;
+  }
+  if (abs(u_whites) > 0.001 || abs(u_blacks) > 0.001) {
+    float black = -u_blacks * 0.16;
+    float white = 1.0 - u_whites * 0.16;
+    t = (t - black) / max(0.08, white - black);
+  }
+  float target = srgbToLinear1(clamp(t, 0.0, 1.0));
+  c *= target / lc;
+  return clamp(c, 0.0, 1.0);
+}
+
+float skinWeight(vec3 c, vec2 uv) {
+  float y = luma(c);
+  float cb = -0.168736 * c.r - 0.331264 * c.g + 0.5 * c.b + 0.5;
+  float cr = 0.5 * c.r - 0.418688 * c.g - 0.081312 * c.b + 0.5;
+  float m =
+    smoothstep(0.30, 0.38, cr) * (1.0 - smoothstep(0.60, 0.70, cr)) *
+    smoothstep(0.28, 0.36, cb) * (1.0 - smoothstep(0.54, 0.64, cb)) *
+    smoothstep(0.10, 0.22, y) * (1.0 - smoothstep(0.90, 1.0, y));
+  float face = 0.0;
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_faceCount) break;
+    vec4 f = u_faces[i];
+    vec2 p = (uv - f.xy) / max(f.zw, vec2(0.0001));
+    face = max(face, 1.0 - smoothstep(0.72, 1.0, length(p)));
+  }
+  return clamp(max(m, face * 0.9), 0.0, 1.0);
+}
+
+void addTap(vec2 base, vec2 offset, float centerLuma, float invSigma2, inout vec3 acc, inout float wsum) {
+  vec3 s = texture2D(u_texture, base + offset).rgb;
+  float dl = luma(s) - centerLuma;
+  float w = exp(-dl * dl * invSigma2);
+  acc += s * w;
+  wsum += w;
+}
+
+vec3 rgb2hsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+vec3 hsv2rgb(vec3 c) {
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+void addBand(
+  float hue, float center, float width, vec3 shift,
+  inout float dh, inout float ds, inout float dl, inout float wsum
+) {
+  float d = abs(mod(hue - center + 540.0, 360.0) - 180.0);
+  float w = 1.0 - smoothstep(width * 0.55, width, d);
+  if (w > 0.0001) {
+    dh += shift.x * w;
+    ds += shift.y * w;
+    dl += shift.z * w;
+    wsum += w;
+  }
+}
+
+vec3 sampleLUT(vec3 c) {
+  float size = u_lutSize;
+  float slice = c.b * (size - 1.0);
+  float s0 = floor(slice);
+  float s1 = min(s0 + 1.0, size - 1.0);
+  float f = slice - s0;
+  float y = (c.g * (size - 1.0) + 0.5) / size;
+  float x0 = (s0 * size + c.r * (size - 1.0) + 0.5) / (size * size);
+  float x1 = (s1 * size + c.r * (size - 1.0) + 0.5) / (size * size);
+  vec3 a = texture2D(u_lut, vec2(x0, y)).rgb;
+  vec3 b = texture2D(u_lut, vec2(x1, y)).rgb;
+  return mix(a, b, f);
+}
+
+void main() {
+  vec2 uv = warpFace(v_uv);
+  vec4 texel = texture2D(u_texture, uv);
+  vec3 c = texel.rgb;
+  float lc = luma(c);
+
+  /* 1. Edge-aware denoise. */
+  if (u_denoise > 0.001) {
+    float sigma = 0.022 + u_denoise * 0.09;
+    float invSigma2 = 1.0 / max(0.0001, sigma * sigma);
+    vec3 acc = c;
+    float wsum = 1.0;
+    vec2 o = u_texel * (1.0 + u_quality * 1.5);
+    addTap(uv, vec2(o.x, 0.0), lc, invSigma2, acc, wsum);
+    addTap(uv, vec2(-o.x, 0.0), lc, invSigma2, acc, wsum);
+    addTap(uv, vec2(0.0, o.y), lc, invSigma2, acc, wsum);
+    addTap(uv, vec2(0.0, -o.y), lc, invSigma2, acc, wsum);
+    if (u_quality > 0.5) {
+      addTap(uv, vec2(o.x, o.y), lc, invSigma2, acc, wsum);
+      addTap(uv, vec2(-o.x, o.y), lc, invSigma2, acc, wsum);
+      addTap(uv, vec2(o.x, -o.y), lc, invSigma2, acc, wsum);
+      addTap(uv, vec2(-o.x, -o.y), lc, invSigma2, acc, wsum);
+    }
+    c = mix(c, acc / wsum, u_denoise * 0.9);
+    lc = luma(c);
+  }
+
+  /* 2. Clarity: halo-limited local contrast on the original detail. */
+  if (abs(u_clarity) > 0.001) {
+    vec2 o = u_texel * (4.0 + u_quality * 6.0);
+    vec3 blur = c;
+    blur += texture2D(u_texture, uv + vec2(o.x, 0.0)).rgb;
+    blur += texture2D(u_texture, uv + vec2(-o.x, 0.0)).rgb;
+    blur += texture2D(u_texture, uv + vec2(0.0, o.y)).rgb;
+    blur += texture2D(u_texture, uv + vec2(0.0, -o.y)).rgb;
+    if (u_quality > 0.5) {
+      blur += texture2D(u_texture, uv + vec2(o.x, o.y)).rgb;
+      blur += texture2D(u_texture, uv + vec2(-o.x, o.y)).rgb;
+      blur += texture2D(u_texture, uv + vec2(o.x, -o.y)).rgb;
+      blur += texture2D(u_texture, uv + vec2(-o.x, -o.y)).rgb;
+      blur /= 9.0;
+    } else {
+      blur /= 5.0;
+    }
+    float detail = clamp(lc - luma(blur), -0.18, 0.18);
+    float mid = 1.0 - smoothstep(0.72, 1.0, lc) * 0.55;
+    c += detail * u_clarity * 1.25 * mid;
+    lc = luma(c);
+  }
+
+  /* 3. Small-radius sharpening with a noise floor. */
+  if (u_sharpen > 0.001) {
+    vec2 o = u_texel;
+    float lb =
+      luma(texture2D(u_texture, uv + vec2(o.x, 0.0)).rgb) +
+      luma(texture2D(u_texture, uv + vec2(-o.x, 0.0)).rgb) +
+      luma(texture2D(u_texture, uv + vec2(0.0, o.y)).rgb) +
+      luma(texture2D(u_texture, uv + vec2(0.0, -o.y)).rgb);
+    float detail = clamp(lc - lb * 0.25, -0.2, 0.2);
+    float mask = smoothstep(0.006, 0.022, abs(detail));
+    c += detail * mask * u_sharpen * 2.2;
+    lc = luma(c);
+  }
+
+  /* 4. Portrait: mask-guided smoothing, blemish removal and skin tone. */
+  if (
+    u_smoothSkin > 0.001 ||
+    abs(u_skinTone) > 0.001 ||
+    u_blemish > 0.001
+  ) {
+    float skin = skinWeight(c, uv);
+    float protect = 0.0;
+    float lips = 0.0;
+    if (u_hasMask > 0.5) {
+      vec3 m = texture2D(u_mask, uv).rgb;
+      skin = m.r;
+      protect = m.g;
+      lips = m.b;
+    }
+    float mask = clamp(skin * (1.0 - protect), 0.0, 1.0);
+    if (mask > 0.01) {
+      vec3 base = c;
+      if (u_smoothSkin > 0.001) {
+        float invSigma2 = 1.0 / (0.045 * 0.045);
+        vec3 acc = c;
+        float wsum = 1.0;
+        // UV radius, not pixel radius: the same visual smoothing at preview
+        // and full-resolution export, and identical tile seams.
+        vec2 o = vec2(0.0045);
+        addTap(uv, vec2(o.x, 0.0), lc, invSigma2, acc, wsum);
+        addTap(uv, vec2(-o.x, 0.0), lc, invSigma2, acc, wsum);
+        addTap(uv, vec2(0.0, o.y), lc, invSigma2, acc, wsum);
+        addTap(uv, vec2(0.0, -o.y), lc, invSigma2, acc, wsum);
+        if (u_quality > 0.5) {
+          addTap(uv, vec2(o.x, o.y), lc, invSigma2, acc, wsum);
+          addTap(uv, vec2(-o.x, o.y), lc, invSigma2, acc, wsum);
+          addTap(uv, vec2(o.x, -o.y), lc, invSigma2, acc, wsum);
+          addTap(uv, vec2(-o.x, -o.y), lc, invSigma2, acc, wsum);
+        }
+        vec3 soft = acc / wsum;
+        float detail = length(base - soft);
+        float keep = smoothstep(0.025, 0.14, detail);
+        // u_skinTexture 0 = strongest smoothing, 1 = keep pores and fine detail.
+        float preserve = mix(0.35, 0.95, u_skinTexture);
+        float strength = mask * u_smoothSkin * 0.92;
+        c = mix(base, soft, strength * (1.0 - keep * preserve));
+        c += (base - soft) * (u_skinTexture * 0.3 * strength);
+      }
+      if (u_blemish > 0.001) {
+        // Spot removal deliberately averages across the blemish edge, so it
+        // must not use the edge-aware addTap weights that preserve edges.
+        // A UV ring wider than the spot keeps preview and export identical.
+        vec2 o = vec2(0.011);
+        vec3 avg = texture2D(u_texture, uv + vec2(o.x, 0.0)).rgb;
+        avg += texture2D(u_texture, uv + vec2(-o.x, 0.0)).rgb;
+        avg += texture2D(u_texture, uv + vec2(0.0, o.y)).rgb;
+        avg += texture2D(u_texture, uv + vec2(0.0, -o.y)).rgb;
+        avg += texture2D(u_texture, uv + vec2(o.x, o.y)).rgb;
+        avg += texture2D(u_texture, uv + vec2(-o.x, o.y)).rgb;
+        avg += texture2D(u_texture, uv + vec2(o.x, -o.y)).rgb;
+        avg += texture2D(u_texture, uv + vec2(-o.x, -o.y)).rgb;
+        avg *= 0.125;
+        float dark = smoothstep(0.02, 0.07, luma(avg) - lc);
+        vec3 delta = c - avg;
+        float red = smoothstep(0.035, 0.11, delta.r - max(delta.g, delta.b));
+        float spot = max(dark, red * 0.85);
+        c = mix(c, avg, mask * u_blemish * spot * 0.85);
+      }
+      if (abs(u_skinTone) > 0.001) {
+        vec3 target = u_skinTone > 0.0
+          ? c * vec3(1.035, 1.005, 0.965)
+          : c * vec3(0.975, 1.0, 1.025);
+        c = mix(c, target, mask * abs(u_skinTone) * 0.7 * (1.0 - lips * 0.45));
+      }
+      lc = luma(c);
+    }
+  }
+
+  /* 5. Preset matrix (gamma), then white balance. */
+  c = clamp(u_color * c + u_offset, 0.0, 1.0);
+  vec3 wb = whiteBalance();
+
+  /*
+   * 6. Exposure and tonal work.
+   *
+   * Linear path: decode once, white-balance, expose, apply a luminance
+   * shoulder to values above 1, tone-map in linear, then encode once. The
+   * legacy path keeps the original gamma-space order exactly.
+   */
+  if (u_linear > 0.5) {
+    c = toLinear(c) * wb;
+    c *= pow(2.0, u_exposure);
+    float L = max(luma(c), 0.000001);
+    if (L > 1.0) {
+      // Compress only the excess above 1, preserving hue and never clipping.
+      c *= (1.0 - (1.0 - 1.0 / L) * 0.35) / L;
+    }
+    c = toneLinear(c);
+    c = toSrgb(c);
+  } else {
+    c *= wb;
+    c *= pow(2.0, u_exposure);
+  }
+
+  /* 7. Perceptual brightness and contrast. */
+  c += u_brightness * 0.22;
+  c = (c - 0.5) * max(0.05, 1.0 + u_contrast) + 0.5;
+  c = clamp(c, 0.0, 1.0);
+
+  /* 8. Saturation and vibrance, weighted towards muted colours. */
+  lc = luma(c);
+  c = mix(vec3(lc), c, max(0.0, 1.0 + u_saturation));
+  if (abs(u_vibrance) > 0.001) {
+    float mx = max(c.r, max(c.g, c.b));
+    float mn = min(c.r, min(c.g, c.b));
+    float sat = mx - mn;
+    float boost = 1.0 + u_vibrance * (1.0 - smoothstep(0.0, 0.55, sat)) * 0.9;
+    lc = luma(c);
+    c = mix(vec3(lc), c, max(0.0, boost));
+  }
+
+  /* 9. Gamma-space tonal path (the linear path already did this above). */
+  if (u_linear < 0.5) {
+    c = toneGamma(c);
+  }
+
+  /* 10. Gamma. */
+  if (abs(u_gamma) > 0.001) {
+    c = pow(c, vec3(1.0 / max(0.2, 1.0 + u_gamma * 0.8)));
+  }
+
+  /* 11. RGB curves (master + per-channel packed into one 256x1 LUT). */
+  if (u_hasCurve > 0.5) {
+    c.r = texture2D(u_curve, vec2(clamp(c.r, 0.0, 1.0), 0.5)).r;
+    c.g = texture2D(u_curve, vec2(clamp(c.g, 0.0, 1.0), 0.5)).g;
+    c.b = texture2D(u_curve, vec2(clamp(c.b, 0.0, 1.0), 0.5)).b;
+  }
+
+  /* 12. 8-band HSL mixer. */
+  if (
+    abs(u_hsl[0].x) + abs(u_hsl[0].y) + abs(u_hsl[0].z) +
+    abs(u_hsl[1].x) + abs(u_hsl[1].y) + abs(u_hsl[1].z) +
+    abs(u_hsl[2].x) + abs(u_hsl[2].y) + abs(u_hsl[2].z) +
+    abs(u_hsl[3].x) + abs(u_hsl[3].y) + abs(u_hsl[3].z) +
+    abs(u_hsl[4].x) + abs(u_hsl[4].y) + abs(u_hsl[4].z) +
+    abs(u_hsl[5].x) + abs(u_hsl[5].y) + abs(u_hsl[5].z) +
+    abs(u_hsl[6].x) + abs(u_hsl[6].y) + abs(u_hsl[6].z) +
+    abs(u_hsl[7].x) + abs(u_hsl[7].y) + abs(u_hsl[7].z) > 0.001
+  ) {
+    vec3 hsv = rgb2hsv(clamp(c, 0.0, 1.0));
+    float hue = hsv.x * 360.0;
+    float dh = 0.0;
+    float ds = 0.0;
+    float dl = 0.0;
+    float wsum = 0.0;
+    addBand(hue, 0.0, 42.0, u_hsl[0], dh, ds, dl, wsum);
+    addBand(hue, 30.0, 36.0, u_hsl[1], dh, ds, dl, wsum);
+    addBand(hue, 60.0, 42.0, u_hsl[2], dh, ds, dl, wsum);
+    addBand(hue, 120.0, 60.0, u_hsl[3], dh, ds, dl, wsum);
+    addBand(hue, 180.0, 54.0, u_hsl[4], dh, ds, dl, wsum);
+    addBand(hue, 240.0, 54.0, u_hsl[5], dh, ds, dl, wsum);
+    addBand(hue, 285.0, 42.0, u_hsl[6], dh, ds, dl, wsum);
+    addBand(hue, 320.0, 42.0, u_hsl[7], dh, ds, dl, wsum);
+    if (wsum > 0.001) {
+      hsv.x = fract(hsv.x + (dh / max(1.0, wsum)) * 0.0833);
+      hsv.y = clamp(hsv.y * (1.0 + (ds / max(1.0, wsum)) * 0.85), 0.0, 1.0);
+      hsv.z = clamp(hsv.z * (1.0 + (dl / max(1.0, wsum)) * 0.5), 0.0, 1.0);
+      c = hsv2rgb(hsv);
+    }
+  }
+
+  /* 13. 3D LUT. */
+  if (u_lutStrength > 0.001) {
+    c = mix(c, sampleLUT(clamp(c, 0.0, 1.0)), u_lutStrength);
+  }
+
+  /* 14. Vignette. */
+  c = clamp(c, 0.0, 1.0);
+  vec2 p = (v_screen - u_vigCenter) / max(u_vigHalf, vec2(0.0001));
+  float d = length(vec2(p.x * u_aspect, p.y)) / sqrt(u_aspect * u_aspect + 1.0);
+  float v = smoothstep(0.34, 1.0, d) * u_vignette * 0.88;
+  c *= (1.0 - v);
+
+  /* 15. Ordered dither before the 8-bit output. */
+  if (u_dither > 0.001) {
+    float b = bayer4(gl_FragCoord.xy) * 1.0666667 - 0.5;
+    c += b * (u_dither / 255.0);
+  }
+  gl_FragColor = vec4(clamp(c, 0.0, 1.0), texel.a);
+}

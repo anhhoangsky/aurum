@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum modular shader test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .wrap { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  canvas { width: 256px; height: 256px; image-rendering: pixelated; background: #000; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; min-width: 560px; }
+  .ok { color: #7fd67f; }
+  .bad { color: #ff7b7b; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="out" width="256" height="256"></canvas>
+  <pre id="log">Running…</pre>
+</div>
+<script type="module">
+const log = document.getElementById('log');
+const lines = [];
+const out = (s) => { lines.push(s); log.textContent = lines.join('\n'); };
+let failures = 0;
+const pass = (s) => { out(`PASS  ${s}`); };
+const fail = (s) => { failures += 1; out(`FAIL  ${s}`); };
+window.addEventListener('error', (event) => fail(`window error: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  fail(`rejection: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+const SIZE = 256;
+
+async function text(url) {
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  return response.text();
+}
+
+function photoCanvas(width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, width, height);
+  g.addColorStop(0, '#070b12');
+  g.addColorStop(0.32, '#2b4560');
+  g.addColorStop(0.68, '#c8a37a');
+  g.addColorStop(1, '#fff0d6');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, width, height);
+
+  // Skin oval roughly inside the face box, plus features the warp can move.
+  ctx.fillStyle = '#c98f6b';
+  ctx.beginPath();
+  ctx.ellipse(width * 0.5, height * 0.52, width * 0.22, height * 0.3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#221a17';
+  ctx.beginPath();
+  ctx.arc(width * 0.41, height * 0.45, width * 0.028, 0, Math.PI * 2);
+  ctx.arc(width * 0.59, height * 0.45, width * 0.028, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#8e3f3d';
+  ctx.beginPath();
+  ctx.ellipse(width * 0.5, height * 0.66, width * 0.06, height * 0.022, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.beginPath();
+  ctx.arc(width * 0.72, height * 0.28, width * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Fine detail for denoise/clarity/sharpen and for liquify sampling.
+  for (let i = 0; i < 220; i += 1) {
+    const x = (i * 37) % width;
+    const y = (i * 71) % height;
+    ctx.fillStyle = i % 3 === 0 ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.35)';
+    ctx.fillRect(x, y, 2, 2);
+  }
+  ctx.strokeStyle = 'rgba(20,20,20,0.55)';
+  for (let i = 0; i < 12; i += 1) {
+    ctx.beginPath();
+    ctx.moveTo(0, 12 + i * 20);
+    ctx.lineTo(width, 8 + i * 20);
+    ctx.stroke();
+  }
+  return canvas;
+}
+
+function solidTexture(gl, width, height, rgba) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+  return texture;
+}
+
+function byteTexture(gl, width, height, fill) {
+  const data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const at = (y * width + x) * 4;
+      const value = fill(x, y);
+      data[at] = value[0];
+      data[at + 1] = value[1];
+      data[at + 2] = value[2];
+      data[at + 3] = value[3];
+    }
+  }
+  return solidTexture(gl, width, height, data);
+}
+
+function compileShader(gl, type, source, label) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const info = gl.getShaderInfoLog(shader);
+    gl.deleteShader(shader);
+    throw new Error(`${label}: ${info}`);
+  }
+  return shader;
+}
+
+function buildProgram(gl, vertexSource, fragmentSource, label) {
+  const vertex = compileShader(gl, gl.VERTEX_SHADER, vertexSource, `${label} vertex`);
+  let fragment;
+  try {
+    fragment = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource, `${label} fragment`);
+  } catch (error) {
+    gl.deleteShader(vertex);
+    throw error;
+  }
+  const program = gl.createProgram();
+  gl.attachShader(program, vertex);
+  gl.attachShader(program, fragment);
+  gl.bindAttribLocation(program, 0, 'a_pos');
+  gl.bindAttribLocation(program, 1, 'a_uv');
+  gl.bindAttribLocation(program, 2, 'a_w');
+  gl.linkProgram(program);
+  gl.deleteShader(vertex);
+  gl.deleteShader(fragment);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const info = gl.getProgramInfoLog(program);
+    gl.deleteProgram(program);
+    throw new Error(`${label} link: ${info}`);
+  }
+  const uniforms = new Map();
+  const count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < count; i += 1) {
+    const info = gl.getActiveUniform(program, i);
+    if (info) uniforms.set(info.name.replace(/\[0\]$/, ''), gl.getUniformLocation(program, info.name));
+  }
+  return { program, uniforms, label };
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const d = a[i] - b[i];
+    sum += d * d;
+    if (Math.abs(d) > max) max = Math.abs(d);
+  }
+  if (max === 0) return { psnr: Infinity, max: 0 };
+  const mse = sum / a.length;
+  return { psnr: 10 * Math.log10((255 * 255) / mse), max };
+}
+
+function variance(data) {
+  let sum = 0;
+  let sum2 = 0;
+  let n = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const v = data[i] + data[i + 1] + data[i + 2];
+    sum += v;
+    sum2 += v * v;
+    n += 1;
+  }
+  const mean = sum / n;
+  return sum2 / n - mean * mean;
+}
+
+try {
+  const [vertexSource, manifest, legacyFragment] = await Promise.all([
+    text('./dist/shaders/vertex.glsl'),
+    text('./dist/shaders/manifest.json').then((raw) => JSON.parse(raw)),
+    text('./test-assets/legacy-fragment.glsl'),
+  ]);
+  const variants = new Map();
+  await Promise.all(manifest.variants.map(async ({ key }) => {
+    variants.set(key, await text(`./dist/shaders/${key}.glsl`));
+  }));
+
+  const canvas = document.getElementById('out');
+  const gl = canvas.getContext('webgl', {
+    alpha: true,
+    premultipliedAlpha: false,
+    antialias: false,
+    depth: false,
+    stencil: false,
+    preserveDrawingBuffer: true,
+  });
+  if (!gl) throw new Error('WebGL1 unavailable');
+  out(`WebGL1: ${gl.getParameter(gl.VERSION)}`);
+  out(`GLSL: ${gl.getParameter(gl.SHADING_LANGUAGE_VERSION)}`);
+  out(`Variants in manifest: ${manifest.variants.length}`);
+
+  const photo = photoCanvas(SIZE, SIZE);
+  const photoTexture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, photoTexture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, photo);
+
+  const whiteTexture = solidTexture(gl, 1, 1, new Uint8Array([255, 255, 255, 255]));
+  const curveTexture = solidTexture(gl, 256, 1, new Uint8Array(256 * 4).fill(255));
+  const lutTexture = solidTexture(gl, 2, 2, new Uint8Array(2 * 2 * 4).fill(255));
+
+  const maskTexture = byteTexture(gl, 4, 4, (x, y) => [
+    190 + x * 8 + y * 3,
+    18 + y * 7,
+    70 + x * 5,
+    255,
+  ]);
+  const liquifyTexture = byteTexture(gl, 4, 4, (x, y) => [
+    128 + (x - 1.5) * 9,
+    128 + (y - 1.5) * -7,
+    128,
+    255,
+  ]);
+  const anchorRows = [
+    [82, 107, 173, 107], // eyeL/eyeR
+    [128, 141, 128, 179], // nose/mouth
+    [102, 60, 168, 60],   // eye radii
+    [94, 85, 128, 68],    // nose/mouth radii
+  ];
+  const anchorTexture = byteTexture(gl, 4, 4, (x) => anchorRows[x]);
+
+  const quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1, -1, 0, 0, 1,
+    1, -1, 1, 0, 1,
+    1, 1, 1, 1, 1,
+    -1, -1, 0, 0, 1,
+    1, 1, 1, 1, 1,
+    -1, 1, 0, 1, 1,
+  ]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 20, 0);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 8);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 20, 16);
+
+  const faces = new Float32Array([
+    0.5, 0.5, 0.3, 0.3,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+  const hsl = new Float32Array([
+    0.10, 0.05, 0.00,
+    0.02, 0.00, 0.03,
+   -0.05, 0.04, 0.02,
+    0.08, 0.06, 0.00,
+    0.00, 0.03, -0.02,
+   -0.03, 0.00, 0.01,
+    0.04, 0.05, 0.00,
+   -0.02, 0.02, 0.01,
+  ]);
+  const identity = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+  const zeros3 = new Float32Array([0, 0, 0]);
+
+  function setUniforms(program, options) {
+    const set = (name, fn) => {
+      const location = program.uniforms.get(name);
+      if (location) fn(location);
+    };
+    const f = (name, value) => set(name, (loc) => gl.uniform1f(loc, value));
+    const i = (name, value) => set(name, (loc) => gl.uniform1i(loc, value));
+    const v2 = (name, value) => set(name, (loc) => gl.uniform2f(loc, value[0], value[1]));
+    const v3 = (name, value) => set(name, (loc) => gl.uniform3fv(loc, value));
+    const m3 = (name, value) => set(name, (loc) => gl.uniformMatrix3fv(loc, false, value));
+
+    m3('u_matrix', identity);
+    v2('u_warp', [0, 0]);
+    m3('u_color', identity);
+    v3('u_offset', zeros3);
+    f('u_vignette', 0.35);
+    f('u_aspect', 1);
+    v2('u_vigCenter', [0, 0]);
+    v2('u_vigHalf', [1, 1]);
+    v2('u_texel', [1 / SIZE, 1 / SIZE]);
+    f('u_dither', 1);
+    f('u_exposure', 0.15);
+    f('u_brightness', 0.05);
+    f('u_contrast', 0.2);
+    f('u_saturation', 0.25);
+    f('u_highlights', 0.2);
+    f('u_shadows', 0.15);
+    f('u_whites', 0.1);
+    f('u_blacks', -0.1);
+    f('u_warmth', 0.2);
+    f('u_tint', -0.15);
+    f('u_vibrance', 0.3);
+    f('u_gamma', 0.15);
+    f('u_clarity', 0.35);
+    f('u_sharpen', 0.25);
+    f('u_denoise', 0.25);
+    f('u_smoothSkin', 0.5);
+    f('u_blemish', 0.4);
+    f('u_skinTexture', 0.3);
+    f('u_skinTone', 0.25);
+    f('u_hasCurve', 0);
+    f('u_lutStrength', 0);
+    f('u_lutSize', 2);
+    f('u_quality', 1);
+    gl.uniform4fv(program.uniforms.get('u_faces'), faces);
+    i('u_faceCount', 1);
+    f('u_hasAnchors', options.anchors ? 1 : 0);
+    v3('u_hsl', hsl);
+    f('u_faceSlim', 0.4);
+    f('u_jawline', 0.3);
+    f('u_chin', 0.2);
+    f('u_eyeSize', 0.3);
+    f('u_noseSize', -0.2);
+    f('u_mouthSize', 0.2);
+    f('u_hasMask', options.mask ? 1 : 0);
+    f('u_liquifyShift', options.liquify ? (options.liquifyShift ?? 0.05) : 0);
+    f('u_linear', options.linear ? 1 : 0);
+
+    i('u_texture', 0);
+    i('u_curve', 1);
+    i('u_lut', 2);
+    i('u_mask', 3);
+    i('u_liquify', 4);
+    i('u_anchors', 5);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, photoTexture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, curveTexture);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, lutTexture);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, options.mask ? maskTexture : whiteTexture);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, options.liquify ? liquifyTexture : whiteTexture);
+    gl.activeTexture(gl.TEXTURE5);
+    gl.bindTexture(gl.TEXTURE_2D, options.anchors ? anchorTexture : whiteTexture);
+  }
+
+  function render(program, options) {
+    gl.viewport(0, 0, SIZE, SIZE);
+    gl.useProgram(program.program);
+    setUniforms(program, options);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    const pixels = new Uint8Array(SIZE * SIZE * 4);
+    gl.readPixels(0, 0, SIZE, SIZE, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    return pixels;
+  }
+
+  // 1. Every build-time variant must compile and link on WebGL1.
+  const programs = new Map();
+  for (const { key } of manifest.variants) {
+    try {
+      programs.set(key, buildProgram(gl, vertexSource, variants.get(key), key));
+      pass(`compile+link ${key}`);
+    } catch (error) {
+      fail(`compile+link ${key}: ${error.message}`);
+    }
+  }
+  if (!programs.has('base') || !programs.has('base-linear') || !programs.has('beauty') || !programs.has('beauty-liquify')) {
+    throw new Error('essential variants did not build');
+  }
+
+  // 2. Feature-equivalent variants must be pixel identical.
+  const parity = (label, source, optionsA, target, optionsB) => {
+    const a = render(source, optionsA);
+    const b = render(target, optionsB);
+    const result = psnr(a, b);
+    if (result.psnr === Infinity) {
+      pass(`${label}: PSNR=∞ max=0`);
+    } else {
+      fail(`${label}: PSNR=${result.psnr.toFixed(2)} dB max=${result.max}`);
+    }
+    return a;
+  };
+
+  const noMask = { mask: false, liquify: false, anchors: true };
+  const withMask = { mask: true, liquify: false, anchors: true };
+  const zeroLiquify = { mask: true, liquify: true, liquifyShift: 0, anchors: true };
+  const withLiquify = { mask: true, liquify: true, liquifyShift: 0.08, anchors: true };
+
+  parity('base-linear vs beauty (mask off)', programs.get('beauty'), noMask, programs.get('base-linear'), noMask);
+  parity('beauty vs beauty-liquify (zero dab)', programs.get('beauty'), withMask, programs.get('beauty-liquify'), zeroLiquify);
+  parity('base vs base-liquify (zero dab)', programs.get('base-liquify'), { ...noMask, liquify: true, liquifyShift: 0 }, programs.get('base'), { ...noMask, liquify: true, liquifyShift: 0 });
+  parity('beauty-gamma vs beauty-gamma-liquify (zero dab)', programs.get('beauty-gamma'), withMask, programs.get('beauty-gamma-liquify'), { ...zeroLiquify, mask: true });
+
+  // 3. The generated variants must reproduce the previous single-program shader.
+  //    A different GLSL layout can make ANGLE round a fused expression by one
+  //    8-bit step, so legacy parity allows max=1; feature parity above is exact.
+  const legacy = (label, linear, options, variant) => {
+    const oldProgram = legacyProgram(linear, label);
+    const a = render(oldProgram, { ...options, linear });
+    const b = render(programs.get(variant), options);
+    const result = psnr(a, b);
+    if (result.max <= 1) {
+      pass(`${label}: PSNR=${result.psnr === Infinity ? '∞' : result.psnr.toFixed(2) + ' dB'} max=${result.max} (≤1 LSB)`);
+    } else {
+      fail(`${label}: PSNR=${result.psnr.toFixed(2)} dB max=${result.max}`);
+    }
+  };
+  const legacyCache = new Map();
+  function legacyProgram(linear, label) {
+    const key = `${label}:${linear}`;
+    if (!legacyCache.has(key)) {
+      legacyCache.set(key, buildProgram(gl, vertexSource, legacyFragment, key));
+    }
+    return legacyCache.get(key);
+  }
+
+  legacy('legacy gamma vs base', false, noMask, 'base');
+  legacy('legacy linear vs base-linear', true, noMask, 'base-linear');
+  legacy('legacy gamma+mask vs beauty-gamma', false, withMask, 'beauty-gamma');
+  legacy('legacy gamma+liquify vs base-liquify', false, { ...noMask, liquify: true, liquifyShift: 0.08 }, 'base-liquify');
+  legacy('legacy linear+mask vs beauty', true, withMask, 'beauty');
+  legacy('legacy linear+mask+liquify vs beauty-liquify', true, withLiquify, 'beauty-liquify');
+  legacy('legacy gamma+mask+liquify vs beauty-gamma-liquify', false, withLiquify, 'beauty-gamma-liquify');
+  legacy('legacy linear+liquify vs base-linear-liquify', true, { ...noMask, liquify: true, liquifyShift: 0.08 }, 'base-linear-liquify');
+
+  // 4. The fallback must still paint an image rather than a blank canvas.
+  const fallbackPixels = render(programs.get('fallback'), { mask: true, liquify: true, anchors: true, linear: true });
+  if (variance(fallbackPixels) > 50) {
+    pass(`fallback renders image (variance=${variance(fallbackPixels).toFixed(1)})`);
+  } else {
+    fail(`fallback looks blank (variance=${variance(fallbackPixels).toFixed(1)})`);
+  }
+
+  out('');
+  out(failures === 0 ? 'RESULT: PASS' : `RESULT: FAIL (${failures})`);
+  document.title = failures === 0 ? 'PASS shader test' : `FAIL (${failures}) shader test`;
+  window.__shaderTest = { done: true, failures };
+} catch (error) {
+  fail(error && error.stack ? error.stack : String(error));
+  out('');
+  out(`RESULT: FAIL (${failures + 1})`);
+  document.title = 'FAIL shader test';
+  window.__shaderTest = { done: true, failures: failures + 1 };
+}
+</script>
+</body>
+</html>
