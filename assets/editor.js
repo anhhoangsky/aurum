@@ -666,7 +666,7 @@ const editor = new AurumEditor({
   locale: 'vi',
   title: 'Chỉnh sửa ảnh',
   startTab: 'adjust',
-  exportTypes: [cfg.exportType],
+  exportTypes: ['image/jpeg', 'image/png', 'image/webp'],
   aiAction: cfg.ai
     ? {
         label: 'AI 4×',

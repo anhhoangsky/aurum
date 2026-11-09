@@ -1084,6 +1084,7 @@ export class AurumEditor extends AurumCore {
   private saveCopyLabel: HTMLElement | null = null;
   private metaName!: HTMLElement;
   private metaInfo!: HTMLElement;
+  private exportSubEl!: HTMLElement;
   private s: UIStrings;
   private locale: Locale;
   private fileBase: string;
@@ -3460,7 +3461,8 @@ export class AurumEditor extends AurumCore {
     `;
 
     q<HTMLElement>(sheet, '.au-sheet__title').textContent = this.s.exportTitle;
-    q<HTMLElement>(sheet, '.au-sheet__sub').textContent = this.s.exportSub;
+    this.exportSubEl = q<HTMLElement>(sheet, '.au-sheet__sub');
+    this.exportSubEl.textContent = this.s.exportSub;
     q<HTMLElement>(sheet, '[data-format-label]').textContent = this.s.format;
 
     this.metaName = q<HTMLElement>(sheet, '[data-meta-name]');
@@ -5244,7 +5246,12 @@ export class AurumEditor extends AurumCore {
     const size = this.getExportSize();
     const format = FORMATS.find((item) => item.type === this.exportType) || FORMATS[0];
     this.metaName.textContent = this.fileName();
-    this.metaInfo.textContent = `${size.width} × ${size.height} px · ${format.label}`;
+    const hasTrans = this.detectAlpha();
+    const est = this.estimateBytes(size.width, size.height);
+    this.metaInfo.textContent = `${size.width} × ${size.height} px · ${format.label} · ~${est}`;
+    this.exportSubEl.textContent = hasTrans && format.type !== 'image/png'
+      ? (this.locale === 'vi' ? 'Nền trong suốt sẽ bị bẹt trên JPEG/WebP — chọn PNG để giữ.' : 'Transparency will be flattened on JPEG/WebP — choose PNG to keep it.')
+      : this.s.exportSub;
     for (const [type, button] of this.formatButtons) {
       button.setAttribute('aria-pressed', String(type === this.exportType));
     }
@@ -5253,6 +5260,38 @@ export class AurumEditor extends AurumCore {
     this.qualityRow.hidden = png;
     this.qualityControl.setDisabled(png);
     this.applyQuality(this.quality);
+  }
+
+  private detectAlpha(): boolean {
+    try {
+      const bitmap = this.getPreviewBitmap();
+      if (!bitmap) return false;
+      const c = document.createElement('canvas');
+      const scale = Math.min(1, 128 / Math.max(1, Math.max(bitmap.width, bitmap.height)));
+      c.width = Math.max(1, Math.round(bitmap.width * scale));
+      c.height = Math.max(1, Math.round(bitmap.height * scale));
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return false;
+      ctx.drawImage(bitmap, 0, 0, c.width, c.height);
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      for (let i = 3; i < d.length; i += 4) {
+        if ((d[i] ?? 255) < 250) return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private estimateBytes(w: number, h: number): string {
+    const px = w * h;
+    const q = this.quality / 100;
+    let bytes = 0;
+    if (this.exportType === 'image/png') bytes = px * 2.2;
+    else if (this.exportType === 'image/webp') bytes = px * (0.08 + q * 0.18);
+    else bytes = px * (0.08 + q * 0.22);
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   private applyQuality(value: number): void {
