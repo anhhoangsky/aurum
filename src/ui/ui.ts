@@ -229,6 +229,7 @@ const STRINGS = {
     brushAdd: 'Giữ (thêm)',
     brushErase: 'Xoá',
     brushSizeMask: 'Kích thước cọ',
+    retouchStrength: 'Độ trắng',
     brushUndo: 'Hoàn tác nét',
     brushInvert: 'Đảo mask',
     brushTransparent: 'Nền trong suốt',
@@ -464,6 +465,7 @@ const STRINGS = {
     brushAdd: 'Keep (add)',
     brushErase: 'Erase',
     brushSizeMask: 'Brush size',
+    retouchStrength: 'Whiten strength',
     brushUndo: 'Undo stroke',
     brushInvert: 'Invert mask',
     brushTransparent: 'Transparent',
@@ -994,12 +996,15 @@ export class AurumEditor extends AurumCore {
   private refineWhitened: CanvasImageSource | null = null;
   private refineWhitenedW = 0;
   private refineWhitenedH = 0;
+  private whitenStrength = 0.6;
   private brushMode: 'add' | 'erase' = 'add';
   private brushSize = 7;
   private refineHistory: Float32Array[] = [];
   private refineStroke: { pointerId: number; snapshotTaken: boolean } | null = null;
   private maskToolbar!: HTMLElement;
   private maskBrushTicks!: TickControl;
+  private whitenStrengthTicks: TickControl | null = null;
+  private whitenStrengthRow: HTMLElement | null = null;
   private maskTransparentBtn: HTMLButtonElement | null = null;
   private maskInvertBtn: HTMLButtonElement | null = null;
   private maskHintEl: HTMLElement | null = null;
@@ -2307,6 +2312,17 @@ export class AurumEditor extends AurumCore {
       format: (v) => `${Math.round(v)}px`,
       onInput: (v) => { this.brushSize = Math.round(v); },
     });
+    this.whitenStrengthTicks = this.makeTicks({
+      label: this.s.retouchStrength,
+      min: 0, max: 100, step: 1, tickStep: 5, defaultValue: Math.round(this.whitenStrength * 100),
+      format: (v) => `${Math.round(v)}%`,
+      onInput: (v) => {
+        this.whitenStrength = Math.min(1, Math.max(0, v / 100));
+        this.drawRefinePreview();
+      },
+    });
+    this.whitenStrengthRow = this.whitenStrengthTicks.row;
+    this.whitenStrengthRow.style.display = 'none';
     const actions = el('div', 'au-mask-actions');
     const cancelBtn = el('button', 'au-chip au-chip--danger');
     cancelBtn.type = 'button';
@@ -2317,7 +2333,7 @@ export class AurumEditor extends AurumCore {
     applyBtn.innerHTML = `<span>${this.s.brushApply}</span>`;
     applyBtn.addEventListener('click', () => void this.applyRefine());
     actions.append(cancelBtn, applyBtn);
-    toolbar.append(toolLabel, modeSeg, quickRow, hint, this.maskBrushTicks.row, actions);
+    toolbar.append(toolLabel, modeSeg, quickRow, hint, this.maskBrushTicks.row, this.whitenStrengthRow, actions);
     this.maskToolbar = toolbar;
     pane.appendChild(toolbar);
   }
@@ -2364,6 +2380,26 @@ export class AurumEditor extends AurumCore {
     return out;
   }
 
+  /** Procedural Retinex lift mixed into RGBA pixels by weight (0..1). */
+  private mixWhitenInto(data: Uint8ClampedArray, weights: Float32Array): void {
+    const strength = this.whitenStrength;
+    for (let i = 0, j = 0; i < weights.length; i++, j += 4) {
+      const m = Math.min(1, Math.max(0, weights[i] ?? 0));
+      if (m <= 0.002) continue;
+      const r = data[j] ?? 0, g = data[j + 1] ?? 0, b = data[j + 2] ?? 0;
+      const Y = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      // Stronger than the engine's 0.35 so brush strokes are clearly visible;
+      // the weight still gates every pixel, so non-brushed areas stay untouched.
+      const boosted = Math.min(1, Y * (1 + strength * 0.7 * (1 - Y)));
+      const scale = Y <= 1e-4 ? 1 : boosted / Y;
+      const inv = 1 - m;
+      data[j] = Math.round(r * inv + r * scale * m);
+      data[j + 1] = Math.round(g * inv + g * scale * m);
+      data[j + 2] = Math.round(b * inv + b * scale * m);
+      data[j + 3] = 255;
+    }
+  }
+
   private drawRefinePreview(): void {
     if (!this.refineOn || !this.refineCanvas || !this.refineSource || !this.refineMask) return;
     const canvas = this.refineCanvas;
@@ -2382,12 +2418,21 @@ export class AurumEditor extends AurumCore {
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
     // Brush preview.
-    // Retouch: bg = original (opaque), fg = AI-whitened blended by mask weight
-    //   (brush adds/removes whitening). Background: bg = checker/white/blur,
-    //   fg = original cut by alpha mask.
+    // Retouch: direct per-pixel mix of the ORIGINAL toward a procedurally
+    //   lightened version by the brushed weight. The AI engine's composite
+    //   only differs from the original on detected skin, so re-weighting it
+    //   showed nothing outside the skin mask; the lift here is computed from
+    //   the original pixels, so the brush whitens wherever the user paints.
+    // Background: bg = checker/white/blur, fg = original cut by alpha mask.
+    const pm = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
     if (this.refineKind === 'retouch') {
       ctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
-    } else if (this.refineMode === 'replace') {
+      const img = ctx.getImageData(0, 0, w, h);
+      this.mixWhitenInto(img.data, pm);
+      ctx.putImageData(img, 0, 0);
+      return;
+    }
+    if (this.refineMode === 'replace') {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, w, h);
     } else if (this.refineMode === 'blur') {
@@ -2411,19 +2456,14 @@ export class AurumEditor extends AurumCore {
         }
       }
     }
-    // downscaled mask for preview
+    // downscaled mask for preview (background only; retouch returned above)
     // Composite: bg already drawn on ctx (fully opaque), overlay fg with
     // alpha mask. The opaque bg covers the stage's original photo underneath.
-    const pm = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
     const fg = document.createElement('canvas');
     fg.width = w; fg.height = h;
     const fctx = fg.getContext('2d');
     if (!fctx) return;
-    if (this.refineKind === 'retouch' && this.refineWhitened) {
-      fctx.drawImage(this.refineWhitened, 0, 0, this.refineWhitenedW, this.refineWhitenedH, 0, 0, w, h);
-    } else {
-      fctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
-    }
+    fctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
     const fgImg = fctx.getImageData(0, 0, w, h);
     const fd = fgImg.data;
     for (let i = 0, j = 0; i < pm.length; i++, j += 4) {
@@ -2438,6 +2478,7 @@ export class AurumEditor extends AurumCore {
     const retouch = this.refineKind === 'retouch';
     if (this.maskInvertBtn) this.maskInvertBtn.style.display = retouch ? 'none' : '';
     if (this.maskTransparentBtn) this.maskTransparentBtn.style.display = retouch ? 'none' : '';
+    if (this.whitenStrengthRow) this.whitenStrengthRow.style.display = retouch ? '' : 'none';
     if (this.maskHintEl) this.maskHintEl.textContent = retouch ? this.s.retouchBrushHint : this.s.brushHint;
     if (this.maskToolLabelEl) this.maskToolLabelEl.textContent = this.s.brushLabel;
     if (!retouch) this.syncMaskTransparentBtn();
@@ -2598,30 +2639,13 @@ export class AurumEditor extends AurumCore {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     if (this.refineKind === 'retouch') {
-      if (!this.refineWhitened) return;
-      // Blend original -> whitened by the brushed weight (0 = original).
-      const origCanvas = document.createElement('canvas');
-      origCanvas.width = w; origCanvas.height = h;
-      const octx = origCanvas.getContext('2d');
-      const whiteCanvas = document.createElement('canvas');
-      whiteCanvas.width = w; whiteCanvas.height = h;
-      const wctx = whiteCanvas.getContext('2d');
-      if (!octx || !wctx) return;
-      octx.drawImage(this.refineSource, 0, 0, w, h);
-      wctx.drawImage(this.refineWhitened, 0, 0, this.refineWhitenedW, this.refineWhitenedH, 0, 0, w, h);
-      const oImg = octx.getImageData(0, 0, w, h);
-      const wImg = wctx.getImageData(0, 0, w, h);
-      const od = oImg.data, wd = wImg.data;
-      for (let i = 0, j = 0; i < fullMask.length; i++, j += 4) {
-        const m = Math.min(1, Math.max(0, fullMask[i] ?? 0));
-        if (m <= 0) continue;
-        const inv = 1 - m;
-        od[j] = Math.round((od[j] ?? 0) * inv + (wd[j] ?? 0) * m);
-        od[j + 1] = Math.round((od[j + 1] ?? 0) * inv + (wd[j + 1] ?? 0) * m);
-        od[j + 2] = Math.round((od[j + 2] ?? 0) * inv + (wd[j + 2] ?? 0) * m);
-        od[j + 3] = 255;
-      }
-      ctx.putImageData(oImg, 0, 0);
+      // Procedural lift from the original pixels (same formula as preview),
+      // gated by the AI mask + brushed weight. refineWhitened is kept for
+      // API compat but no longer gates the effect, so brushing always shows.
+      ctx.drawImage(this.refineSource, 0, 0, w, h);
+      const img = ctx.getImageData(0, 0, w, h);
+      this.mixWhitenInto(img.data, fullMask);
+      ctx.putImageData(img, 0, 0);
     } else {
       // Build background
       if (this.refineMode === 'replace') {
