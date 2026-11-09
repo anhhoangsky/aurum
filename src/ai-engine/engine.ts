@@ -188,7 +188,9 @@ class AurumAIImpl implements AurumAI {
       const plan = planSegmentation(width, height, this.device, adapter.inputSize);
       // iOS Safari kills the tab (uncatchable OOM) when weights + activations
       // exceed the budget. Refuse upfront with a clear error instead.
-      const estimatedPeakMB = plan.estimatedPeakMB + (descriptor?.memoryMB ?? 0);
+      // descriptor.memoryMB already includes runtime+tensors, so take the max
+      // (adding both would double-count and falsely refuse MODNet on iPhone).
+      const estimatedPeakMB = Math.max(plan.estimatedPeakMB, descriptor?.memoryMB ?? 0);
       if (estimatedPeakMB > this.device.memoryBudgetMB) {
         return failure(task, this.quality, {
           code: 'out-of-memory',
