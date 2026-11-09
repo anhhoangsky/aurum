@@ -8,7 +8,7 @@ import type {
   ImageSource,
   Size,
 } from '../core/types';
-import { ADJUST_RANGES, clamp, defaultEnhance } from '../core/state';
+import { ADJUST_RANGES, clamp, defaultCrop, defaultEnhance, defaultTransform } from '../core/state';
 import { isAbortError } from '../core/async';
 import { PRESETS, presetThumbnail } from '../core/color';
 import type { PresetCategory } from '../core/color';
@@ -4069,7 +4069,15 @@ export class AurumEditor extends AurumCore {
     ) as unknown as EditorState['adjust'];
     try {
       this.setState(
-        { ...saved, filter: 'original', adjust: zeroAdjust, enhance: defaultEnhance(), retouch: { liquify: [] } },
+        {
+          ...saved,
+          filter: 'original',
+          adjust: zeroAdjust,
+          enhance: defaultEnhance(),
+          retouch: { liquify: [] },
+          transform: defaultTransform(),
+          crop: defaultCrop(),
+        },
         { history: false, silent: true },
       );
     } catch {
