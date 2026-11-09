@@ -46,6 +46,12 @@ export interface AurumAICreateOptions extends AurumAIOptions {
   /** Self-hosted MediaPipe selfie segmenter assets (Phase 4). When absent,
    *  segmentPeople/segmentObjects report `not-supported`. */
   mediapipe?: SelfieSegmenterOptions;
+  /**
+   * Override the automatic memory budget (MiB). Default-safe on iPhone;
+   * raising it attempts large models on memory-tight devices where Safari
+   * may kill the tab. Testers only — e.g. { memoryBudgetMB: 1024 }.
+   */
+  memoryBudgetMB?: number;
 }
 
 function failure(
@@ -125,7 +131,10 @@ class AurumAIImpl implements AurumAI {
   private disposed = false;
 
   constructor(device: DeviceProfile, options: AurumAICreateOptions) {
-    this.device = device;
+    this.device =
+      options.memoryBudgetMB && options.memoryBudgetMB > 0
+        ? { ...device, memoryBudgetMB: options.memoryBudgetMB, reasons: [...device.reasons, 'budget-override'] as const }
+        : device;
     this.quality = device.quality;
     this.backend = options.backend ?? device.backend;
     this.runtime = options.runtime;

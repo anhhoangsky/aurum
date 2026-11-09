@@ -56,11 +56,14 @@ function errorText(err) {
 
 async function ensureAI() {
   if (!ai) {
+    const risky = new URLSearchParams(location.search).get('risky') === '1';
+    if (risky) log('CHẾ ĐỘ RISKY: budget 1024 MB — Safari có thể kill tab khi OOM.');
     log('Tạo AI Engine (probe thiết bị)…');
     ai = await create({
       offline: true,
       quality: 'medium',
       runtime: RUNTIME,
+      memoryBudgetMB: risky ? 1024 : undefined,
       onStatus: (m) => log(m),
     });
     log(`Engine sẵn sàng — backend ${ai.backend}, quality ${ai.quality}`);
@@ -99,30 +102,41 @@ function render() {
 }
 
 async function bitmapFrom(source) {
-  if (typeof source === 'string') {
-    const blob = await (await fetch(source)).blob();
-    try {
-      return await createImageBitmap(blob);
-    } catch {
-      // iOS Safari / format edge cases: fall back to <img> (drawImage accepts it).
-      const url = URL.createObjectURL(blob);
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
+  if (typeof source !== 'string') return source;
+  const blob = await (await fetch(source)).blob();
+  try {
+    return await createImageBitmap(blob);
+  } catch {
+    // iOS Safari / format edge cases: fall back to <img>, fully decoded.
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.src = url;
+    if (img.decode) {
+      await img.decode();
+    } else {
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
         img.onerror = reject;
-        img.src = url;
       });
     }
+    return img;
   }
-  return source;
+}
+
+function sizeOf(bitmap) {
+  return {
+    width: bitmap.naturalWidth || bitmap.width || 0,
+    height: bitmap.naturalHeight || bitmap.height || 0,
+  };
 }
 
 async function loadImage(urlOrBitmap) {
   const bitmap = await bitmapFrom(urlOrBitmap);
   source = bitmap;
-  sourceW = bitmap.width || bitmap.naturalWidth;
-  sourceH = bitmap.height || bitmap.naturalHeight;
-  if (!sourceW || !sourceH) throw new Error('Ảnh không đọc được (0 kích thước)');
+  const size = sizeOf(bitmap);
+  sourceW = size.width;
+  sourceH = size.height;
+  if (!sourceW || !sourceH) throw new Error(`Ảnh không đọc được (0 kích thước) - type=${bitmap?.constructor?.name ?? typeof bitmap}`);
   mask = null;
   activeMask = null;
   instances = [];
