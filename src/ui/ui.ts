@@ -1699,11 +1699,7 @@ export class AurumEditor extends AurumCore {
   }
 
   private buildFilterPane(pane: HTMLElement): void {
-    const top = el('div', 'au-deck__row au-deck__row--top');
-    const reset = iconButton('reset', this.s.resetFilter, () => this.setFilter('original'));
-    reset.classList.add('au-reset');
-    top.append(reset);
-    pane.appendChild(top);
+    // Gọn: nút reset nằm cố định đầu danh sách (không còn top row)
 
     // Category chips — Meitu / Xingtu / Lightroom / Mono / Chuẩn
     const cats = el('div', 'au-chips au-filter-cats');
@@ -2098,11 +2094,19 @@ export class AurumEditor extends AurumCore {
   private buildAIPane(pane: HTMLElement): void {
     // Gọn: bỏ header description, vào thẳng chọn model + thao tác (Apple Simplicity)
 
-    // Model picker — ISNet default (user choice: quality)
-    const modelLabel = el('div', 'au-model-label');
+    // Model picker — collapsible, ISNet default (user choice: quality)
+    const modelColl = el('div', 'au-collapsible au-model-coll');
+    const modelHead = el('button', 'au-collapsible__head au-model-head');
+    modelHead.type = 'button';
+    modelHead.setAttribute('aria-expanded', 'false');
+    const modelLabel = el('span', 'au-model-label');
     modelLabel.textContent = this.s.modelLabel;
     this.bgModelLabelEl = modelLabel;
-    pane.appendChild(modelLabel);
+    const modelChev = el('span', 'au-chev');
+    modelChev.textContent = '▾';
+    modelHead.append(modelLabel, modelChev);
+    const modelBody = el('div', 'au-collapsible__body');
+    modelBody.hidden = true;
     const seg = el('div', 'au-seg au-model-seg');
     this.bgModelSegEl = seg;
     seg.setAttribute('role', 'group');
@@ -2138,11 +2142,20 @@ export class AurumEditor extends AurumCore {
       this.bgModelButtons.set(m.id, b);
       seg.appendChild(b);
     }
-    pane.appendChild(seg);
+    modelBody.append(seg);
     this.bgModelDetail = el('div', 'au-model-detail');
     const initD = models.find((x) => x.id === this.bgModel) ?? models[0];
     this.bgModelDetail.textContent = `${this.s[initD.label]} · ${this.s[initD.detail]}`;
-    pane.appendChild(this.bgModelDetail);
+    modelBody.append(this.bgModelDetail);
+    modelHead.addEventListener('click', () => {
+      const open = modelBody.hidden;
+      modelBody.hidden = !open;
+      modelHead.setAttribute('aria-expanded', String(open));
+      modelChev.textContent = open ? '▴' : '▾';
+      modelColl.classList.toggle('is-open', open);
+    });
+    modelColl.append(modelHead, modelBody);
+    pane.appendChild(modelColl);
 
     const list = el('div', 'au-ai-pane__list au-ai-pane__list--row');
     this.bgListEl = list;
@@ -4177,6 +4190,14 @@ export class AurumEditor extends AurumCore {
     const current = this.getState().filter;
     this.filterWrap.replaceChildren();
     this.filterButtons.clear();
+    // Reset pinned as sticky first item — always visible while scrolling the rail
+    const resetBtn = el('button', 'au-filter au-filter--reset');
+    resetBtn.type = 'button';
+    resetBtn.innerHTML = `${icon('reset')}<span>${this.s.resetFilter}</span>`;
+    resetBtn.setAttribute('aria-label', this.s.resetFilter);
+    resetBtn.setAttribute('title', this.s.resetFilter);
+    resetBtn.addEventListener('click', () => this.setFilter('original'));
+    this.filterWrap.appendChild(resetBtn);
     const visible = PRESETS.filter(
       (preset) => this.filterCat === 'all' || preset.category === this.filterCat,
     );
