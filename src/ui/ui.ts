@@ -3509,7 +3509,17 @@ export class AurumEditor extends AurumCore {
       if (!controller.signal.aborted) this.toast(this.s.retouchDone);
     } catch (error) {
       if (isAbortError(error) || controller.signal.aborted) this.toast(this.s.aiCancelled);
-      else this.toast(this.s.retouchFailed, true);
+      else {
+        console.error('[aurum] retouch failed:', error);
+        const msg = error instanceof Error ? error.message : String(error ?? '');
+        // Surface the real cause (offline install / ORT / decode) instead of
+        // hiding it behind the generic toast. Keep toast short (detail holds detail).
+        this.bgDetail.textContent = `${this.s.retouchFailed} — ${msg.slice(0, 120)}`;
+        this.bgPanel.classList.add('is-open');
+        this.bgPanel.hidden = false;
+        this.toast(msg ? `${this.s.retouchFailed} — ${msg.slice(0, 60)}` : this.s.retouchFailed, true);
+        return;
+      }
     } finally {
       this.bgBusy = false;
       this.bgAbort = null;

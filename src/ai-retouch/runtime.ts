@@ -6,7 +6,7 @@
 export type RetouchBackend = 'webgpu' | 'wasm';
 
 export interface OrtTensor {
-  readonly data: Float32Array;
+  readonly data: Float32Array | BigInt64Array;
   readonly dims: readonly number[];
   readonly type: string;
 }
@@ -30,8 +30,8 @@ export interface OrtModule {
     logLevel?: string;
   };
   readonly Tensor: new (
-    type: 'float32',
-    data: Float32Array,
+    type: string,
+    data: Float32Array | BigInt64Array,
     dims: readonly number[],
   ) => OrtTensor;
   readonly InferenceSession: {

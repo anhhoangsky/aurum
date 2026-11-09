@@ -201,24 +201,37 @@ class AurumRetouchImpl implements AurumRetouch {
       }
       this.onStatus?.(`Face detect 128px (${this.backend})…`);
       options.onProgress?.('face-detect');
-      const loaded = await createSession(bytes, { runtime: this.runtime, backend: this.backend, onStatus: this.onStatus }, options.signal);
       try {
-        const inputCanvas = toFaceCanvas(source);
-        const { blazefaceToTensor: toT } = await import('./models');
-        const tensor = toT(loaded.module, inputCanvas);
-        const out = await loaded.session.run({
-          image: tensor,
-          conf_threshold: { data: new Float32Array([0.5]), dims: [1], type: 'float32' } as any,
-          max_detections: { data: new Int32Array([10]), dims: [1], type: 'int64' } as any,
-          iou_threshold: { data: new Float32Array([0.3]), dims: [1], type: 'float32' } as any,
-        });
-        const raw = out[loaded.session.outputNames[0]!] ?? out['selectedBoxes'];
-        const decoded = decodeBlazeBoxes(raw);
-        faces = decoded.map((d) => d.box);
-        landmarks = decoded.map((d) => d.landmarks!).filter(Boolean) as RetouchLandmarks[];
-        options.signal?.throwIfAborted();
-      } finally {
-        await loaded.dispose();
+        const loaded = await createSession(bytes, { runtime: this.runtime, backend: this.backend, onStatus: this.onStatus }, options.signal);
+        try {
+          const inputCanvas = toFaceCanvas(source);
+          const { blazefaceToTensor: toT } = await import('./models');
+          const tensor = toT(loaded.module, inputCanvas);
+          const conf = new loaded.module.Tensor('float32', new Float32Array([0.5]), [1]);
+          const maxDet = new loaded.module.Tensor('int64', new BigInt64Array([10n]), [1]);
+          const iou = new loaded.module.Tensor('float32', new Float32Array([0.3]), [1]);
+          const out = await loaded.session.run({
+            image: tensor,
+            conf_threshold: conf,
+            max_detections: maxDet,
+            iou_threshold: iou,
+          });
+          const raw = out[loaded.session.outputNames[0]!] ?? out['selectedBoxes'];
+          const decoded = decodeBlazeBoxes(raw);
+          faces = decoded.map((d) => d.box);
+          landmarks = decoded.map((d) => d.landmarks!).filter(Boolean) as RetouchLandmarks[];
+          options.signal?.throwIfAborted();
+        } finally {
+          await loaded.dispose();
+        }
+      } catch (e: any) {
+        if (e?.name === 'AbortError' || options.signal?.aborted) throw e;
+        // BlazeFace mini-model is optional: if ORT/session fails on a device
+        // (e.g. WebGPU not available), fall back to YCbCr skin mask so whiten
+        // still works instead of failing the whole retouch task.
+        console.warn('[aurum-ai-retouch] BlazeFace inference failed, falling back to skin-only mask:', e);
+        faces = [];
+        landmarks = [];
       }
     }
     // Require at least one face to apply whitening safely (avoid skin-coloured walls)

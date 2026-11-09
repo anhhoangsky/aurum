@@ -428,7 +428,7 @@ async function getRetouchEngine(context) {
   if (!retouchEnginePromise) {
     context?.report?.(-1, 'Đang khởi tạo AI retouch (BlazeFace)…');
     retouchEnginePromise = (async () => {
-      const mod = await import(trustedScriptUrl('./assets/aurum-ai-retouch.esm.js?v=1'));
+      const mod = await import(trustedScriptUrl('./assets/aurum-ai-retouch.esm.js?v=2'));
       const engine = await mod.create({
         offline: true,
         quality: 'medium',
@@ -437,6 +437,8 @@ async function getRetouchEngine(context) {
       });
       return { engine, mod };
     })();
+    // Don't cache a rejected init — a failed CDN fetch must retry on next tap.
+    retouchEnginePromise.catch(() => { retouchEnginePromise = null; });
   }
   return retouchEnginePromise;
 }
@@ -449,23 +451,36 @@ async function runRetouch(editor, context, mode) {
   const ensure = async (id) => {
     if (installed.includes(id)) return;
     context?.report?.(-1, `Đang tải model ${id} (1 lần, kiểm tra SHA-256)…`);
-    await engine.installModel(id, '', context?.signal);
+    try {
+      await engine.installModel(id, '', context?.signal);
+    } catch (e) {
+      console.error(`[aurum] installModel ${id} failed:`, e);
+      throw new Error(`Tải BlazeFace lỗi: ${e?.message || e} (kiểm tra mạng, tải lại)`);
+    }
     installed.push(id);
   };
+  // smooth/blemish/tone are honest Phase stubs — say so clearly instead of
+  // falling into the generic "Chưa retouch được" toast.
+  if (mode !== 'whiten') {
+    const phaseMsg = mode === 'smooth'
+      ? 'Mịn da AI chưa có (Phase 2) — dùng thanh Mịn da ở tab Tinh chỉnh'
+      : mode === 'blemish'
+        ? 'Xóa mụn AI chưa có (Phase 3 LaMa) — dùng Eraser ở Tinh chỉnh'
+        : 'Tông da AI chưa có (Phase 4) — dùng Trắng da + Tone tay';
+    throw new Error(phaseMsg);
+  }
   await ensure('blazeface-onnx');
   let result;
-  if (mode === 'whiten') {
-    context?.report?.(-1, 'Đang trắng da AI (BlazeFace + Retinex, offline)…');
+  context?.report?.(-1, 'Đang trắng da AI (BlazeFace + Retinex, offline)…');
+  try {
     result = await engine.whitenSkin(source, { strength: 0.5, signal: context?.signal, onProgress: (s) => context?.report?.(-1, s) });
-  } else if (mode === 'smooth') {
-    result = await engine.smoothSkinAI(source, {});
-  } else if (mode === 'blemish') {
-    result = await engine.removeBlemish(source, {});
-  } else {
-    result = await engine.adjustSkinTone(source, {});
+  } catch (e) {
+    console.error('[aurum] whitenSkin threw:', e);
+    throw new Error(`Trắng da lỗi: ${e?.message || e}`);
   }
   if (!result?.success) {
-    throw new Error(result?.error?.message || 'AI retouch chưa sẵn sàng');
+    console.error('[aurum] whitenSkin result:', result?.error);
+    throw new Error(result?.error?.message || 'AI retouch chưa sẵn sàng (chưa cài BlazeFace?)');
   }
   if (!result.composite) throw new Error('AI retouch không trả về ảnh');
   const c = document.createElement('canvas');
