@@ -684,6 +684,8 @@ const editor = new AurumEditor({
     }
   },
 });
+// Demo harness (demo-panel.js) loads device files through this handle.
+window.__aurumEditor = editor;
 
 // Server-side YuNet boxes let the portrait sliders target real faces without
 // shipping a model to the browser. They are optional; an empty list is normal.
