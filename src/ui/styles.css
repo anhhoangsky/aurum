@@ -1008,7 +1008,7 @@
 .au-mask-tools__label{font-size:11px;font-weight:750;color:#f0ead8}
 .au-mask-seg{grid-template-columns:1fr 1fr!important;margin-top:6px}
 .au-mask-btn{display:flex;align-items:center;justify-content:center;gap:6px;height:34px;border-radius:9px;color:var(--au-muted);font-size:11px;font-weight:700}
-.au-mask-btn svg{width:15px;height:15px}
+.au-mask-btn svg{width:14px;height:14px;flex:0 0 14px}
 .au-mask-btn[aria-pressed="true"]{background:var(--au-gold-soft);color:var(--au-gold)}
 .au-mask-hint{color:var(--au-muted);font-size:10px;line-height:1.4;margin:6px 0}
 .au-mask-actions{display:grid;grid-template-columns:1fr 1.4fr;gap:6px;margin-top:6px}
@@ -1047,9 +1047,9 @@
 .au-ai-pane__list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .au-ai-pane__list--row{flex-direction:row;overflow-x:auto;scroll-snap-type:x proximity;padding:2px 0 4px;scrollbar-width:none;gap:8px}
 .au-ai-pane__list--row::-webkit-scrollbar{display:none}
-.au-ai-pill{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:5px;min-width:74px;min-height:58px;padding:9px 10px;border-radius:13px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);scroll-snap-align:start;transition:transform .12s ease,border-color .15s ease,background .15s ease}
-.au-ai-pill svg{width:20px;height:20px;color:#d8d5df}
-.au-ai-pill span{font-size:10.5px;font-weight:650;color:#e8e4db;white-space:nowrap}
+.au-ai-pill{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-width:68px;min-height:52px;padding:7px 8px;border-radius:13px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);scroll-snap-align:start;transition:transform .12s ease,border-color .15s ease,background .15s ease}
+.au-ai-pill svg{width:17px;height:17px;flex:0 0 17px;color:#d8d5df}
+.au-ai-pill span{font-size:10px;font-weight:650;color:#e8e4db;white-space:nowrap}
 .au-ai-pill:active{transform:scale(.96)}
 .au-ai-pill.is-primary{border-color:rgba(243,199,123,.4);background:rgba(243,199,123,.09)}
 .au-ai-pill.is-primary svg{color:var(--au-gold)}

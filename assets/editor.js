@@ -422,6 +422,60 @@ const RUNTIME_BG = {
 };
 
 let bgEnginePromise = null;
+let retouchEnginePromise = null;
+
+async function getRetouchEngine(context) {
+  if (!retouchEnginePromise) {
+    context?.report?.(-1, 'Đang khởi tạo AI retouch (BlazeFace)…');
+    retouchEnginePromise = (async () => {
+      const mod = await import(trustedScriptUrl('./assets/aurum-ai-retouch.esm.js?v=1'));
+      const engine = await mod.create({
+        offline: true,
+        quality: 'medium',
+        runtime: RUNTIME_BG,
+        onStatus: (m) => context?.report?.(-1, m),
+      });
+      return { engine, mod };
+    })();
+  }
+  return retouchEnginePromise;
+}
+
+async function runRetouch(editor, context, mode) {
+  const source = editor.sourceBitmap();
+  if (!source) throw new Error('Chưa có ảnh');
+  const { engine } = await getRetouchEngine(context);
+  const installed = (await engine.getInstalledModels().catch(() => [])).map((m) => m.id);
+  const ensure = async (id) => {
+    if (installed.includes(id)) return;
+    context?.report?.(-1, `Đang tải model ${id} (1 lần, kiểm tra SHA-256)…`);
+    await engine.installModel(id, '', context?.signal);
+    installed.push(id);
+  };
+  await ensure('blazeface-onnx');
+  let result;
+  if (mode === 'whiten') {
+    context?.report?.(-1, 'Đang trắng da AI (BlazeFace + Retinex, offline)…');
+    result = await engine.whitenSkin(source, { strength: 0.5, signal: context?.signal, onProgress: (s) => context?.report?.(-1, s) });
+  } else if (mode === 'smooth') {
+    result = await engine.smoothSkinAI(source, {});
+  } else if (mode === 'blemish') {
+    result = await engine.removeBlemish(source, {});
+  } else {
+    result = await engine.adjustSkinTone(source, {});
+  }
+  if (!result?.success) {
+    throw new Error(result?.error?.message || 'AI retouch chưa sẵn sàng');
+  }
+  if (!result.composite) throw new Error('AI retouch không trả về ảnh');
+  const c = document.createElement('canvas');
+  c.width = result.composite.width;
+  c.height = result.composite.height;
+  c.getContext('2d').putImageData(result.composite, 0, 0);
+  const blob = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('PNG encoding failed'))), 'image/png'));
+  await editor.load(blob);
+  editor.showTab('adjust');
+}
 
 async function getBGEngine(context, modelId) {
   if (!bgEnginePromise) {
@@ -565,6 +619,7 @@ const editor = new AurumEditor({
       }
     : undefined,
   backgroundAction: { run: runBackground },
+  retouchAction: { run: runRetouch },
   onSave: (blob) => uploadEdit(blob, 'overwrite'),
   onSaveCopy: (blob) => uploadEdit(blob, 'copy'),
   onClose: () => {

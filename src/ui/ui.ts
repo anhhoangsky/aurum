@@ -243,6 +243,13 @@ const STRINGS = {
     textAlignCenter: 'Giữa',
     textAlignRight: 'Phải',
     textShowFrame: 'Khung chữ',
+    retouchTitle: 'AI Retouch',
+    retouchWhiten: 'Trắng da',
+    retouchSmooth: 'Mịn da',
+    retouchBlemish: 'Xóa mụn',
+    retouchTone: 'Tông da',
+    retouchDone: 'Đã retouch AI',
+    retouchFailed: 'Chưa retouch được',
   },
   en: {
     title: 'Edit photo',
@@ -465,6 +472,13 @@ const STRINGS = {
     textAlignCenter: 'Center',
     textAlignRight: 'Right',
     textShowFrame: 'Frame',
+    retouchTitle: 'AI Retouch',
+    retouchWhiten: 'Whiten',
+    retouchSmooth: 'Smooth',
+    retouchBlemish: 'Blemish',
+    retouchTone: 'Tone',
+    retouchDone: 'AI retouch done',
+    retouchFailed: 'Could not retouch',
   },
 } as const;
 
@@ -493,6 +507,16 @@ export interface AIAction {
 
 export type BackgroundMode = 'remove' | 'blur' | 'replace' | 'person';
 export type AiModelId = 'isnet-fp16' | 'birefnet-lite-512-fp16' | 'modnet-fp16';
+export type RetouchMode = 'whiten' | 'smooth' | 'blemish' | 'tone';
+
+export interface RetouchActionContext {
+  signal: AbortSignal;
+  report: (progress: number, label?: string) => void;
+}
+
+export interface RetouchAction {
+  run: (editor: AurumEditor, context: RetouchActionContext, mode: RetouchMode) => Promise<void>;
+}
 
 export interface BackgroundActionContext {
   signal: AbortSignal;
@@ -560,6 +584,7 @@ export interface AurumUIOptions extends Omit<AurumCoreOptions, 'container'> {
    * The core never imports ORT or model bytes.
    */
   backgroundAction?: BackgroundAction;
+  retouchAction?: RetouchAction;
 }
 
 interface TickControl {
@@ -907,10 +932,16 @@ export class AurumEditor extends AurumCore {
   private filterTuneButtons = new Map<keyof Adjustments, HTMLButtonElement>();
   private filterTuneWrap!: HTMLElement;
   private backgroundAction?: BackgroundAction;
+  private retouchAction?: RetouchAction;
   private bgBusy = false;
   private bgAbort: AbortController | null = null;
   private bgDetail!: HTMLElement;
   private bgPanel!: HTMLElement;
+  private bgModelLabelEl!: HTMLElement;
+  private bgModelSegEl!: HTMLElement;
+  private bgListEl!: HTMLElement;
+  private retouchListEl!: HTMLElement;
+  private retouchLabelEl!: HTMLElement;
   private bgModel: AiModelId = (() => {
     try {
       const v = localStorage.getItem('aurum:ai-model');
@@ -919,9 +950,6 @@ export class AurumEditor extends AurumCore {
   })();
   private bgModelButtons = new Map<AiModelId, HTMLButtonElement>();
   private bgModelDetail!: HTMLElement;
-  private bgModelLabelEl!: HTMLElement;
-  private bgModelSegEl!: HTMLElement;
-  private bgListEl!: HTMLElement;
   // Mask brush refine state
   private refineCanvas!: HTMLCanvasElement;
   private refineOn = false;
@@ -1048,6 +1076,7 @@ export class AurumEditor extends AurumCore {
       exportTypes,
       aiAction,
       backgroundAction,
+      retouchAction,
       ...coreOptions
     } = options;
     super({
@@ -1068,6 +1097,7 @@ export class AurumEditor extends AurumCore {
     this.autoDownload = autoDownload !== false;
     this.aiAction = aiAction;
     this.backgroundAction = backgroundAction;
+    this.retouchAction = retouchAction;
     if (exportTypes && exportTypes.length) {
       this.exportTypes = exportTypes.filter((type, index) =>
         FORMATS.some((format) => format.type === type) &&
@@ -2134,6 +2164,26 @@ export class AurumEditor extends AurumCore {
       list.appendChild(note);
     }
     pane.appendChild(list);
+    // AI Retouch — Skin Whitening (Phase 1), other modes honest stubs
+    const retouchLabel = el('div', 'au-model-label');
+    retouchLabel.textContent = this.s.retouchTitle;
+    this.retouchLabelEl = retouchLabel;
+    pane.appendChild(retouchLabel);
+    const retouchList = el('div', 'au-ai-pane__list au-ai-pane__list--row');
+    this.retouchListEl = retouchList;
+    const mkRetouch = (mode: RetouchMode, label: string, icn: IconName, primary = false) => {
+      const row = el('button', `au-ai-pill ${primary ? 'is-primary' : ''}`);
+      row.type = 'button';
+      row.innerHTML = `${icon(icn)}<span>${escHtml(label)}</span>`;
+      row.setAttribute('aria-label', label);
+      row.addEventListener('click', () => void this.runRetouch(mode));
+      retouchList.appendChild(row);
+    };
+    mkRetouch('whiten', this.s.retouchWhiten, 'wand', true);
+    mkRetouch('smooth', this.s.retouchSmooth, 'filter');
+    mkRetouch('blemish', this.s.retouchBlemish, 'brush');
+    mkRetouch('tone', this.s.retouchTone, 'contrast');
+    pane.appendChild(retouchList);
 
     // Mask toolbar (visible when refineOn)
     const toolbar = el('div', 'au-mask-tools');
@@ -2340,7 +2390,7 @@ export class AurumEditor extends AurumCore {
     this.refineCanvas.style.display = 'block';
     this.maskToolbar.style.display = 'block';
     // Hide model + action list while refining (dock becomes mask tools only)
-    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
+    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl, this.retouchLabelEl, this.retouchListEl]) {
       if (el) el.style.display = 'none';
     }
     this.positionTexts();
@@ -2375,7 +2425,7 @@ export class AurumEditor extends AurumCore {
     this.refineHistory = [];
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
     if (this.maskToolbar) this.maskToolbar.style.display = 'none';
-    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
+    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl, this.retouchLabelEl, this.retouchListEl]) {
       if (el) el.style.display = '';
     }
     this.positionTexts();
@@ -3465,6 +3515,35 @@ export class AurumEditor extends AurumCore {
     } catch (error) {
       if (isAbortError(error) || controller.signal.aborted) this.toast(this.s.aiCancelled);
       else this.toast(this.s.bgFailed, true);
+    } finally {
+      this.bgBusy = false;
+      this.bgAbort = null;
+      this.bgPanel.classList.remove('is-open');
+      this.bgPanel.hidden = true;
+    }
+  }
+
+  private async runRetouch(mode: RetouchMode): Promise<void> {
+    if (this.bgBusy || !this.isReady) return;
+    if (!this.retouchAction) {
+      this.toast(this.s.bgNeedHost, true);
+      return;
+    }
+    const controller = new AbortController();
+    this.bgBusy = true;
+    this.bgAbort = controller;
+    this.bgPanel.hidden = false;
+    this.bgPanel.classList.add('is-open');
+    this.bgDetail.textContent = this.s.bgRunning;
+    try {
+      await this.retouchAction.run(this, {
+        signal: controller.signal,
+        report: (_p, label) => { if (label) this.bgDetail.textContent = label; },
+      }, mode);
+      if (!controller.signal.aborted) this.toast(this.s.retouchDone);
+    } catch (error) {
+      if (isAbortError(error) || controller.signal.aborted) this.toast(this.s.aiCancelled);
+      else this.toast(this.s.retouchFailed, true);
     } finally {
       this.bgBusy = false;
       this.bgAbort = null;
