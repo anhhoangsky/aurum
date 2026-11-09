@@ -253,10 +253,13 @@ const STRINGS = {
     retouchSmooth: 'Mịn da',
     retouchBlemish: 'Xóa mụn',
     retouchTone: 'Tông da',
+    retouchHair: 'Đổi màu tóc',
     retouchDone: 'Đã retouch AI',
     retouchFailed: 'Chưa retouch được',
-    retouchBrushHint: 'Cọ để tăng/giảm độ trắng: Giữ = trắng thêm, Xoá = hoàn tác trắng.',
-    retouchBrushReady: 'AI xong — cọ chỉnh trắng da rồi Hoàn tất',
+    retouchBrushHint: 'Cọ để tăng/giảm hiệu ứng: Giữ = thêm, Xoá = hoàn tác.',
+    retouchBrushReady: 'AI xong — cọ chỉnh hiệu ứng rồi Hoàn tất',
+    retouchWarm: 'Ấm / Lạnh',
+    retouchHue: 'Đổi màu',
   },
   en: {
     title: 'Edit photo',
@@ -489,10 +492,13 @@ const STRINGS = {
     retouchSmooth: 'Smooth',
     retouchBlemish: 'Blemish',
     retouchTone: 'Tone',
+    retouchHair: 'Hair color',
     retouchDone: 'AI retouch done',
     retouchFailed: 'Could not retouch',
-    retouchBrushHint: 'Brush to add/remove whitening: Keep = whiten more, Erase = undo whitening.',
-    retouchBrushReady: 'AI done — brush the whitening, then Done',
+    retouchBrushHint: 'Brush to add/remove the effect: Keep = add, Erase = undo.',
+    retouchBrushReady: 'AI done — brush the effect, then Done',
+    retouchWarm: 'Warm / Cool',
+    retouchHue: 'Hue shift',
   },
 } as const;
 
@@ -521,7 +527,7 @@ export interface AIAction {
 
 export type BackgroundMode = 'remove' | 'blur' | 'replace' | 'person';
 export type AiModelId = 'isnet-fp16' | 'birefnet-lite-512-fp16' | 'modnet-fp16';
-export type RetouchMode = 'whiten' | 'smooth' | 'blemish' | 'tone';
+export type RetouchMode = 'whiten' | 'smooth' | 'blemish' | 'tone' | 'hair';
 
 export interface RetouchActionContext {
   signal: AbortSignal;
@@ -993,10 +999,13 @@ export class AurumEditor extends AurumCore {
   private refineBaseMode: BackgroundMode = 'remove';
   private refineModelId = '';
   private refineKind: 'bg' | 'retouch' = 'bg';
+  private retouchEffect: RetouchMode = 'whiten';
   private refineWhitened: CanvasImageSource | null = null;
   private refineWhitenedW = 0;
   private refineWhitenedH = 0;
   private whitenStrength = 0.6;
+  private toneWarm = 30;
+  private hairHue = 140;
   private brushMode: 'add' | 'erase' = 'add';
   private brushSize = 7;
   private brushRingEl: HTMLElement | null = null;
@@ -1007,6 +1016,8 @@ export class AurumEditor extends AurumCore {
   private maskBrushTicks!: TickControl;
   private whitenStrengthTicks: TickControl | null = null;
   private whitenStrengthRow: HTMLElement | null = null;
+  private auxTicks: TickControl | null = null;
+  private auxRow: HTMLElement | null = null;
   private maskTransparentBtn: HTMLButtonElement | null = null;
   private maskInvertBtn: HTMLButtonElement | null = null;
   private maskHintEl: HTMLElement | null = null;
@@ -2248,6 +2259,7 @@ export class AurumEditor extends AurumCore {
     mkRetouch('smooth', this.s.retouchSmooth, 'filter');
     mkRetouch('blemish', this.s.retouchBlemish, 'brush');
     mkRetouch('tone', this.s.retouchTone, 'contrast');
+    mkRetouch('hair', this.s.retouchHair, 'layers');
     this.retouchListEl = list;
     this.retouchLabelEl = sep;
     if (!this.backgroundAction) {
@@ -2325,6 +2337,19 @@ export class AurumEditor extends AurumCore {
     });
     this.whitenStrengthRow = this.whitenStrengthTicks.row;
     this.whitenStrengthRow.style.display = 'none';
+    // Aux slider: warm/cool forTone, hue forHair. One live control re-labelled per effect.
+    this.auxTicks = this.makeTicks({
+      label: this.s.retouchWarm,
+      min: -100, max: 100, step: 1, tickStep: 10, defaultValue: this.toneWarm,
+      format: (v) => `${Math.round(v)}`,
+      onInput: (v) => {
+        if (this.retouchEffect === 'hair') this.hairHue = Math.round(v);
+        else this.toneWarm = Math.round(v);
+        this.drawRefinePreview();
+      },
+    });
+    this.auxRow = this.auxTicks.row;
+    this.auxRow.style.display = 'none';
     const actions = el('div', 'au-mask-actions');
     const cancelBtn = el('button', 'au-chip au-chip--danger');
     cancelBtn.type = 'button';
@@ -2335,7 +2360,7 @@ export class AurumEditor extends AurumCore {
     applyBtn.innerHTML = `<span>${this.s.brushApply}</span>`;
     applyBtn.addEventListener('click', () => void this.applyRefine());
     actions.append(cancelBtn, applyBtn);
-    toolbar.append(toolLabel, modeSeg, quickRow, hint, this.maskBrushTicks.row, this.whitenStrengthRow, actions);
+    toolbar.append(toolLabel, modeSeg, quickRow, hint, this.maskBrushTicks.row, this.whitenStrengthRow, this.auxRow, actions);
     this.maskToolbar = toolbar;
     pane.appendChild(toolbar);
   }
@@ -2402,6 +2427,127 @@ export class AurumEditor extends AurumCore {
     }
   }
 
+  private mixRetouchInto(data: Uint8ClampedArray, w: number, h: number, weights: Float32Array): void {
+    const effect = this.retouchEffect;
+    if (effect === 'whiten') { this.mixWhitenInto(data, weights); return; }
+    if (effect === 'smooth') { this.mixSmoothInto(data, w, h, weights); return; }
+    if (effect === 'blemish') { this.mixBlemishInto(data, w, h, weights); return; }
+    if (effect === 'tone') { this.mixToneInto(data, weights); return; }
+    this.mixHairInto(data, weights);
+  }
+
+  private blurredCopy(data: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
+    // Cheap edge-soft blur via 1/8 downscale (same trick as blur preview).
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    const tctx = tmp.getContext('2d', { willReadFrequently: true });
+    if (!tctx) return new Uint8ClampedArray(data);
+    const small = document.createElement('canvas');
+    small.width = Math.max(1, w >> 3); small.height = Math.max(1, h >> 3);
+    const sctx = small.getContext('2d');
+    if (!sctx) return new Uint8ClampedArray(data);
+    const img = new ImageData(new Uint8ClampedArray(data), w, h);
+    tctx.putImageData(img, 0, 0);
+    sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
+    sctx.drawImage(tmp, 0, 0, small.width, small.height);
+    tctx.imageSmoothingEnabled = true; tctx.imageSmoothingQuality = 'high';
+    tctx.clearRect(0, 0, w, h);
+    tctx.drawImage(small, 0, 0, w, h);
+    const blurred = tctx.getImageData(0, 0, w, h);
+    return blurred.data;
+  }
+
+  private mixSmoothInto(data: Uint8ClampedArray, w: number, h: number, weights: Float32Array): void {
+    const blurred = this.blurredCopy(data, w, h);
+    const s = this.whitenStrength;
+    for (let i = 0, j = 0; i < weights.length; i++, j += 4) {
+      const m = Math.min(1, Math.max(0, weights[i] ?? 0));
+      if (m <= 0.002) continue;
+      // Frequency separation: keep base from blur, damp detail by (1 - s*m).
+      const keepDetail = 1 - s * m;
+      const r0 = data[j] ?? 0, g0 = data[j + 1] ?? 0, b0 = data[j + 2] ?? 0;
+      const rb = blurred[j] ?? r0, gb = blurred[j + 1] ?? g0, bb = blurred[j + 2] ?? b0;
+      data[j] = Math.round(rb + (r0 - rb) * keepDetail);
+      data[j + 1] = Math.round(gb + (g0 - gb) * keepDetail);
+      data[j + 2] = Math.round(bb + (b0 - bb) * keepDetail);
+      data[j + 3] = 255;
+    }
+  }
+
+  private mixBlemishInto(data: Uint8ClampedArray, w: number, h: number, weights: Float32Array): void {
+    const blurred = this.blurredCopy(data, w, h);
+    const s = this.whitenStrength;
+    for (let i = 0, j = 0; i < weights.length; i++, j += 4) {
+      const m = Math.min(1, Math.max(0, weights[i] ?? 0)) * s;
+      if (m <= 0.002) continue;
+      const inv = 1 - m;
+      data[j] = Math.round((data[j] ?? 0) * inv + (blurred[j] ?? 0) * m);
+      data[j + 1] = Math.round((data[j + 1] ?? 0) * inv + (blurred[j + 1] ?? 0) * m);
+      data[j + 2] = Math.round((data[j + 2] ?? 0) * inv + (blurred[j + 2] ?? 0) * m);
+      data[j + 3] = 255;
+    }
+  }
+
+  private mixToneInto(data: Uint8ClampedArray, weights: Float32Array): void {
+    const warm = this.toneWarm / 100;
+    const s = this.whitenStrength;
+    for (let i = 0, j = 0; i < weights.length; i++, j += 4) {
+      const m = Math.min(1, Math.max(0, weights[i] ?? 0));
+      if (m <= 0.002) continue;
+      const r = data[j] ?? 0, g = data[j + 1] ?? 0, b = data[j + 2] ?? 0;
+      const Y = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      const boosted = Math.min(1, Y * (1 + s * 0.35 * (1 - Y)));
+      const scale = Y <= 1e-4 ? 1 : boosted / Y;
+      const tr = Math.min(255, Math.max(0, r * scale * (1 + warm * 0.22)));
+      const tg = Math.min(255, Math.max(0, g * scale * (1 + warm * 0.03)));
+      const tb = Math.min(255, Math.max(0, b * scale * (1 - warm * 0.2)));
+      const inv = 1 - m;
+      data[j] = Math.round(r * inv + tr * m);
+      data[j + 1] = Math.round(g * inv + tg * m);
+      data[j + 2] = Math.round(b * inv + tb * m);
+      data[j + 3] = 255;
+    }
+  }
+
+  private mixHairInto(data: Uint8ClampedArray, weights: Float32Array): void {
+    const shift = ((this.hairHue % 360) + 360) % 360;
+    const s = this.whitenStrength;
+    for (let i = 0, j = 0; i < weights.length; i++, j += 4) {
+      const m = Math.min(1, Math.max(0, weights[i] ?? 0)) * (0.35 + 0.65 * s);
+      if (m <= 0.002) continue;
+      const r = (data[j] ?? 0) / 255, g = (data[j + 1] ?? 0) / 255, b = (data[j + 2] ?? 0) / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const d = max - min;
+      let hh = 0;
+      if (d > 1e-6) {
+        if (max === r) hh = ((g - b) / d) % 6;
+        else if (max === g) hh = (b - r) / d + 2;
+        else hh = (r - g) / d + 4;
+        hh *= 60;
+        if (hh < 0) hh += 360;
+      }
+      const sat = max <= 1e-6 ? 0 : d / max;
+      const val = max;
+      const nh = ((hh + shift) % 360 + 360) % 360;
+      const c = val * sat;
+      const x = c * (1 - Math.abs(((nh / 60) % 2) - 1));
+      const mm = val - c;
+      let rr = 0, gg = 0, bb = 0;
+      if (nh < 60) { rr = c; gg = x; }
+      else if (nh < 120) { rr = x; gg = c; }
+      else if (nh < 180) { gg = c; bb = x; }
+      else if (nh < 240) { gg = x; bb = c; }
+      else if (nh < 300) { rr = x; bb = c; }
+      else { rr = c; bb = x; }
+      rr = (rr + mm) * 255; gg = (gg + mm) * 255; bb = (bb + mm) * 255;
+      const inv = 1 - m;
+      data[j] = Math.round((data[j] ?? 0) * inv + rr * m);
+      data[j + 1] = Math.round((data[j + 1] ?? 0) * inv + gg * m);
+      data[j + 2] = Math.round((data[j + 2] ?? 0) * inv + bb * m);
+      data[j + 3] = 255;
+    }
+  }
+
   private drawRefinePreview(): void {
     if (!this.refineOn || !this.refineCanvas || !this.refineSource || !this.refineMask) return;
     const canvas = this.refineCanvas;
@@ -2430,7 +2576,7 @@ export class AurumEditor extends AurumCore {
     if (this.refineKind === 'retouch') {
       ctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
       const img = ctx.getImageData(0, 0, w, h);
-      this.mixWhitenInto(img.data, pm);
+      this.mixRetouchInto(img.data, w, h, pm);
       ctx.putImageData(img, 0, 0);
       return;
     }
@@ -2481,6 +2627,19 @@ export class AurumEditor extends AurumCore {
     if (this.maskInvertBtn) this.maskInvertBtn.style.display = retouch ? 'none' : '';
     if (this.maskTransparentBtn) this.maskTransparentBtn.style.display = retouch ? 'none' : '';
     if (this.whitenStrengthRow) this.whitenStrengthRow.style.display = retouch ? '' : 'none';
+    const auxFor = retouch && (this.retouchEffect === 'tone' || this.retouchEffect === 'hair');
+    if (this.auxRow) this.auxRow.style.display = auxFor ? '' : 'none';
+    if (auxFor && this.auxTicks) {
+      if (this.retouchEffect === 'hair') {
+        this.auxTicks.setRange(-180, 180, 1, 10, true);
+        this.auxTicks.setLabel(this.s.retouchHue);
+        this.auxTicks.set(this.hairHue, false);
+      } else {
+        this.auxTicks.setRange(-100, 100, 1, 10, true);
+        this.auxTicks.setLabel(this.s.retouchWarm);
+        this.auxTicks.set(this.toneWarm, false);
+      }
+    }
     if (this.maskHintEl) this.maskHintEl.textContent = retouch ? this.s.retouchBrushHint : this.s.brushHint;
     if (this.maskToolLabelEl) this.maskToolLabelEl.textContent = this.s.brushLabel;
     if (!retouch) this.syncMaskTransparentBtn();
@@ -2589,9 +2748,11 @@ export class AurumEditor extends AurumCore {
     source: CanvasImageSource, w: number, h: number,
     mask: Float32Array, mw: number, mh: number,
     whitened: CanvasImageSource, whitenW: number, whitenH: number,
+    effect: RetouchMode = 'whiten',
   ): void {
     this.refineOn = true;
     this.refineKind = 'retouch';
+    this.retouchEffect = effect;
     this.refineWhitened = whitened;
     this.refineWhitenedW = whitenW; this.refineWhitenedH = whitenH;
     this.refineSource = source;
@@ -2685,12 +2846,11 @@ export class AurumEditor extends AurumCore {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     if (this.refineKind === 'retouch') {
-      // Procedural lift from the original pixels (same formula as preview),
-      // gated by the AI mask + brushed weight. refineWhitened is kept for
-      // API compat but no longer gates the effect, so brushing always shows.
+      // Procedural effect from the original pixels (same formula as preview),
+      // gated by the AI mask + brushed weight.
       ctx.drawImage(this.refineSource, 0, 0, w, h);
       const img = ctx.getImageData(0, 0, w, h);
-      this.mixWhitenInto(img.data, fullMask);
+      this.mixRetouchInto(img.data, w, h, fullMask);
       ctx.putImageData(img, 0, 0);
     } else {
       // Build background
@@ -3830,15 +3990,14 @@ export class AurumEditor extends AurumCore {
         report: (_p, label) => { if (label) this.bgDetail.textContent = label; },
       }, mode);
       if (controller.signal.aborted) return;
-      // Whiten returns mask + whitened image -> enter brush to adjust weight
-      // (Giữ = whiten more, Xoá = undo whitening) before Hoàn tất.
+      // Retouch returns mask + image -> enter brush to adjust weight before Hoàn tất.
       if (result && (result as RetouchBrushResult).mask && (result as RetouchBrushResult).whitened) {
         const m = result as RetouchBrushResult;
         if (sourceBefore) {
           this.enterRetouchBrush(
             sourceBefore, sizeBefore.width, sizeBefore.height,
             m.mask, m.maskWidth, m.maskHeight,
-            m.whitened, m.whitenWidth, m.whitenHeight,
+            m.whitened, m.whitenWidth, m.whitenHeight, mode,
           );
           this.toast(this.s.retouchBrushReady);
           return;

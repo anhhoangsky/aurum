@@ -459,36 +459,49 @@ async function runRetouch(editor, context, mode) {
     }
     installed.push(id);
   };
-  // smooth/blemish/tone are honest Phase stubs — say so clearly instead of
-  // falling into the generic "Chưa retouch được" toast.
-  if (mode !== 'whiten') {
-    const phaseMsg = mode === 'smooth'
-      ? 'Mịn da AI chưa có (Phase 2) — dùng thanh Mịn da ở tab Tinh chỉnh'
-      : mode === 'blemish'
-        ? 'Xóa mụn AI chưa có (Phase 3 LaMa) — dùng Eraser ở Tinh chỉnh'
-        : 'Tông da AI chưa có (Phase 4) — dùng Trắng da + Tone tay';
-    throw new Error(phaseMsg);
-  }
   await ensure('blazeface-onnx');
   let result;
-  context?.report?.(-1, 'Đang trắng da AI (BlazeFace + Retinex, offline)…');
+  const labels = {
+    whiten: 'Đang trắng da AI (BlazeFace + Retinex, offline)…',
+    smooth: 'Đang phân tích da để mịn (offline)…',
+    blemish: 'Đang chuẩn bị cọ xoá mụn (offline)…',
+    tone: 'Đang phân tích tông da (offline)…',
+    hair: 'Đang lấy vùng tóc (offline)…',
+  };
+  context?.report?.(-1, labels[mode] || 'Đang retouch AI (offline)…');
   try {
-    result = await engine.whitenSkin(source, { strength: 0.5, signal: context?.signal, onProgress: (s) => context?.report?.(-1, s) });
+    if (mode === 'hair') {
+      result = await engine.segmentHairMask(source, { signal: context?.signal, onProgress: (s) => context?.report?.(-1, s) });
+    } else {
+      result = await engine.whitenSkin(source, { strength: 0.5, signal: context?.signal, onProgress: (s) => context?.report?.(-1, s) });
+    }
   } catch (e) {
-    console.error('[aurum] whitenSkin threw:', e);
-    throw new Error(`Trắng da lỗi: ${e?.message || e}`);
+    console.error('[aurum] retouch threw:', e);
+    throw new Error(`Retouch lỗi: ${e?.message || e}`);
   }
   if (!result?.success) {
-    console.error('[aurum] whitenSkin result:', result?.error);
+    console.error('[aurum] retouch result:', result?.error);
     throw new Error(result?.error?.message || 'AI retouch chưa sẵn sàng (chưa cài BlazeFace?)');
+  }
+  // For blemish, start from an empty mask so the user paints spots to heal.
+  if (mode === 'blemish' && result.skinMask) {
+    result.skinMask = { width: result.skinMask.width, height: result.skinMask.height, data: new Float32Array(result.skinMask.data.length) };
+  }
+  // For hair, composite is unused (procedural hue shift in UI); keep a dummy
+  // canvas so the brush return path below works unchanged.
+  if (!result.composite) {
+    const size = editor.source();
+    const c = document.createElement('canvas');
+    c.width = size.width; c.height = size.height;
+    result.composite = c.getContext('2d').createImageData(c.width, c.height);
   }
   if (!result.composite) throw new Error('AI retouch không trả về ảnh');
   const c = document.createElement('canvas');
   c.width = result.composite.width;
   c.height = result.composite.height;
   c.getContext('2d').putImageData(result.composite, 0, 0);
-  // Return skin mask + whitened image so UI enters brush mode (Giữ/Xoá adjust
-  // the whitening weight) instead of loading immediately.
+  // Return AI mask so UI enters brush mode (Giữ/Xoá adjust the weight) instead
+  // of loading immediately.
   if (result.skinMask && result.skinMask.data?.length && result.skinMask.width > 0) {
     const MAX = 1600;
     const k = Math.min(1, MAX / Math.max(result.skinMask.width, result.skinMask.height));

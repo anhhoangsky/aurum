@@ -11,7 +11,8 @@ export type RetouchTask =
   | 'skin-whitening'
   | 'skin-smoothing'
   | 'blemish-removal'
-  | 'skin-tone';
+  | 'skin-tone'
+  | 'hair-color';
 
 export interface RetouchError {
   code:
@@ -92,6 +93,7 @@ export interface AurumRetouch {
   smoothSkinAI(source: AISource, options?: WhitenOptions): Promise<RetouchResult>;
   removeBlemish(source: AISource, options?: WhitenOptions): Promise<RetouchResult>;
   adjustSkinTone(source: AISource, options?: WhitenOptions): Promise<RetouchResult>;
+  segmentHairMask(source: AISource, options?: WhitenOptions): Promise<RetouchResult>;
   getInstalledModels(): Promise<InstalledModel[]>;
   installModel(id: string, url: string, signal?: AbortSignal): Promise<InstalledModel>;
   dispose(): void;

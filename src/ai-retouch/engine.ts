@@ -153,6 +153,84 @@ function buildSkinMaskFromFaces(source: AISource, faces: RetouchFaceBox[], maxSi
   return featherMask(mask, 2);
 }
 
+function buildHairMaskFromFaces(source: AISource, faces: RetouchFaceBox[], maxSize = 640): Mask {
+  const { width: sw, height: sh } = sourceSize(source);
+  const scale = Math.min(1, maxSize / Math.max(1, sw, sh));
+  const w = Math.max(1, Math.round(sw * scale));
+  const h = Math.max(1, Math.round(sh * scale));
+  const canvas = canvasOf(w, h);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('2D canvas is unavailable');
+  ctx.drawImage(source, 0, 0, w, h);
+  const pixels = ctx.getImageData(0, 0, w, h).data;
+  // Skin reference (same sampling as skin mask) to exclude skin from hair.
+  let refCr: number | null = null;
+  let refCb: number | null = null;
+  if (faces.length) {
+    const crs: number[] = [], cbs: number[] = [];
+    const pts = [[0.3, 0.62], [0.7, 0.62], [0.5, 0.26]] as const;
+    for (const face of faces) {
+      for (const [lu, lv] of pts) {
+        const cx = Math.round((face.x + lu * face.w) * (w - 1));
+        const cy = Math.round((face.y + lv * face.h) * (h - 1));
+        for (let dy = -2; dy <= 2; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            const px = cx + dx, py = cy + dy;
+            if (px < 0 || py < 0 || px >= w || py >= h) continue;
+            const at = (py * w + px) * 4;
+            const r = (pixels[at] ?? 0) / 255, g = (pixels[at + 1] ?? 0) / 255, b = (pixels[at + 2] ?? 0) / 255;
+            crs.push(0.5 + 0.5 * r - 0.418688 * g - 0.081312 * b);
+            cbs.push(0.5 - 0.168736 * r - 0.331264 * g + 0.5 * b);
+          }
+        }
+      }
+    }
+    if (crs.length >= 12) {
+      crs.sort((a, b) => a - b); cbs.sort((a, b) => a - b);
+      refCr = crs[crs.length >> 1] ?? 0;
+      refCb = cbs[cbs.length >> 1] ?? 0;
+    }
+  }
+  const out = new Float32Array(w * h);
+  const smoothstep = (e0: number, e1: number, v: number) => {
+    const t = Math.min(1, Math.max(0, (v - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  };
+  for (let py = 0; py < h; py++) {
+    const v = (py + 0.5) / h;
+    for (let px = 0; px < w; px++) {
+      const u = (px + 0.5) / w;
+      const at = (py * w + px) * 4;
+      const r = (pixels[at] ?? 0) / 255, g = (pixels[at + 1] ?? 0) / 255, b = (pixels[at + 2] ?? 0) / 255;
+      const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const cr = 0.5 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+      const cb = 0.5 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+      let skinLike = 0;
+      if (refCr !== null && refCb !== null) {
+        const dist = Math.sqrt((cr - refCr) ** 2 + (cb - refCb) ** 2);
+        skinLike = 1 - smoothstep(0.035, 0.085, dist);
+      }
+      // Head ellipse: face centre shifted up, 1.45x face size.
+      let headW = 0;
+      for (const f of faces) {
+        const cx = f.x + f.w * 0.5, cy = f.y + f.h * 0.5 - f.h * 0.25;
+        const rx = f.w * 0.95, ry = f.h * 0.95;
+        const dx = (u - cx) / Math.max(0.0001, rx), dy = (v - cy) / Math.max(0.0001, ry);
+        headW = Math.max(headW, 1 - smoothstep(0.72, 1.05, Math.sqrt(dx * dx + dy * dy)));
+        // Carve out the face itself so skin isn't included.
+        const fx = (u - (f.x + f.w * 0.5)) / Math.max(0.0001, f.w * 0.55);
+        const fy = (v - (f.y + f.h * 0.55)) / Math.max(0.0001, f.h * 0.5);
+        const inFace = Math.sqrt(fx * fx + fy * fy) < 0.85;
+        if (inFace) headW = Math.min(headW, 0.15);
+      }
+      const gate = faces.length ? headW : 0;
+      const lumaGate = smoothstep(0.03, 0.12, y) * (1 - smoothstep(0.96, 1.0, y));
+      out[py * w + px] = Math.min(1, Math.max(0, gate * (1 - skinLike * 0.85) * lumaGate));
+    }
+  }
+  return featherMask({ width: w, height: h, data: out }, 2);
+}
+
 class AurumRetouchImpl implements AurumRetouch {
   readonly quality: string;
   readonly backend: 'webgpu' | 'wasm';
@@ -292,6 +370,70 @@ class AurumRetouchImpl implements AurumRetouch {
       if (e?.name === 'AbortError') return failure('skin-whitening', { code: 'aborted', message: 'Aborted' });
       throw e;
     }
+  }
+  async segmentHairMask(source: AISource, options: WhitenOptions = {}): Promise<RetouchResult> {
+    const started = performance.now();
+    const task = 'hair-color' as const;
+    const { width, height } = sourceSize(source);
+    if (!width || !height) return failure(task, { code: 'invalid-input', message: 'Needs a non-empty image' });
+    let faces: RetouchFaceBox[] = options.faces ?? [];
+    let landmarks: RetouchLandmarks[] = [];
+    if (!faces.length) {
+      const bytes = await loadModelBytes('blazeface-onnx');
+      if (!bytes) return failure(task, { code: 'model-not-installed', message: 'BlazeFace not installed — cần cài 1 lần.' });
+      if (!this.runtime) return failure(task, { code: 'runtime-unavailable', message: 'No ONNX Runtime URLs were supplied' });
+      const descriptor = getModelDescriptor('blazeface-onnx');
+      const plan = planRetouch(width, height, this.device, 128);
+      if (Math.max(plan.estimatedPeakMB, descriptor?.memoryMB ?? 0) > this.device.memoryBudgetMB) {
+        return failure(task, { code: 'out-of-memory', message: 'Out of memory for face detect' });
+      }
+      this.onStatus?.(`Face detect 128px (${this.backend})…`);
+      try {
+        const loaded = await createSession(bytes, { runtime: this.runtime, backend: this.backend, onStatus: this.onStatus }, options.signal);
+        try {
+          const inputCanvas = toFaceCanvas(source);
+          const { blazefaceToTensor: toT } = await import('./models');
+          const tensor = toT(loaded.module, inputCanvas);
+          const out = await loaded.session.run({
+            image: tensor,
+            conf_threshold: new loaded.module.Tensor('float32', new Float32Array([0.5]), [1]),
+            max_detections: new loaded.module.Tensor('int64', new BigInt64Array([10n]), [1]),
+            iou_threshold: new loaded.module.Tensor('float32', new Float32Array([0.3]), [1]),
+          });
+          const raw = out[loaded.session.outputNames[0]!] ?? out['selectedBoxes'];
+          const decoded = decodeBlazeBoxes(raw);
+          faces = decoded.map((d) => d.box);
+          landmarks = decoded.map((d) => d.landmarks!).filter(Boolean) as RetouchLandmarks[];
+          options.signal?.throwIfAborted();
+        } finally {
+          await loaded.dispose();
+        }
+      } catch (e: any) {
+        if (e?.name === 'AbortError' || options.signal?.aborted) throw e;
+        faces = [];
+        landmarks = [];
+      }
+    }
+    if (!faces.length) return failure(task, { code: 'invalid-input', message: 'Không nhận diện được mặt để lấy vùng tóc.' });
+    const hairMask = buildHairMaskFromFaces(source, faces);
+    // Composite is unused by UI (procedural hue shift); supply a 1px-size copy
+    // so callers can distinguish success. Real effect is computed in UI.
+    return {
+      success: true,
+      task,
+      faces,
+      landmarks,
+      skinMask: { width: hairMask.width, height: hairMask.height, data: hairMask.data },
+      metadata: {
+        modelId: 'blazeface-onnx',
+        modelVersion: getModelDescriptor('blazeface-onnx')?.version ?? '',
+        backend: this.backend,
+        inferenceTime: performance.now() - started,
+        faceCount: faces.length,
+        quality: this.quality,
+        installedModel: true,
+      },
+    };
   }
   async smoothSkinAI(): Promise<RetouchResult> {
     return failure('skin-smoothing', { code: 'model-not-installed', message: 'smoothSkinAI is Phase 2 — guided-filter freq. separation pending. Use whitenSkin + procedural smoothSkin today.' });
