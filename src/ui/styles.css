@@ -1038,6 +1038,10 @@
 .au-filter.is-active{color:var(--au-gold)}
 .au-filter--saved.is-active canvas{border-color:var(--au-gold)!important;box-shadow:0 0 0 1px rgba(243,199,123,.5),0 8px 22px rgba(226,173,82,.22)!important}
 .au-mask-hint{color:var(--au-muted);font-size:10px;line-height:1.4;margin:6px 0}
+.au-hair-row{display:flex;gap:7px;margin-top:7px;padding:2px 0;overflow-x:auto;scrollbar-width:none}
+.au-hair-row::-webkit-scrollbar{display:none}
+.au-hair-swatch{flex:0 0 auto;width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);box-shadow:0 3px 10px rgba(0,0,0,.4)}
+.au-hair-swatch.is-active{border-color:var(--au-gold);box-shadow:0 0 0 2px rgba(243,199,123,.45),0 3px 10px rgba(0,0,0,.4)}
 .au-mask-actions{display:grid;grid-template-columns:1fr 1.4fr;gap:6px;margin-top:6px}
 .au-mask-apply{height:38px;border-radius:11px;font-size:12px}
 .au-tab svg.wand{stroke-width:1.9}

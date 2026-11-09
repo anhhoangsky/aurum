@@ -529,6 +529,26 @@ export type BackgroundMode = 'remove' | 'blur' | 'replace' | 'person';
 export type AiModelId = 'isnet-fp16' | 'birefnet-lite-512-fp16' | 'modnet-fp16';
 export type RetouchMode = 'whiten' | 'smooth' | 'blemish' | 'tone' | 'hair';
 
+interface HairPreset {
+  id: string;
+  name: string;
+  nameEn: string;
+  hue: number;
+  sat: number;
+  bright: number;
+  css: string;
+}
+
+const HAIR_PRESETS: HairPreset[] = [
+  { id: 'black', name: 'Đen', nameEn: 'Black', hue: 0, sat: 0, bright: 0.72, css: '#1c1a18' },
+  { id: 'brown', name: 'Nâu', nameEn: 'Brown', hue: 25, sat: 0.62, bright: 1.0, css: '#5a3a22' },
+  { id: 'blonde', name: 'Vàng', nameEn: 'Blonde', hue: 45, sat: 0.82, bright: 1.25, css: '#c9a04a' },
+  { id: 'red', name: 'Đỏ', nameEn: 'Red', hue: 358, sat: 0.72, bright: 1.0, css: '#7a2e1f' },
+  { id: 'purple', name: 'Tím', nameEn: 'Purple', hue: 278, sat: 0.68, bright: 0.95, css: '#5a2e6a' },
+  { id: 'blue', name: 'Xanh', nameEn: 'Blue', hue: 205, sat: 0.7, bright: 0.95, css: '#2e4a6a' },
+  { id: 'ash', name: 'Khói', nameEn: 'Ash', hue: 35, sat: 0.28, bright: 1.3, css: '#b8b0a8' },
+];
+
 export interface RetouchActionContext {
   signal: AbortSignal;
   report: (progress: number, label?: string) => void;
@@ -1005,7 +1025,8 @@ export class AurumEditor extends AurumCore {
   private refineWhitenedH = 0;
   private whitenStrength = 0.6;
   private toneWarm = 30;
-  private hairHue = 140;
+  private hairHue = 0;
+  private hairColorId = 'brown';
   private brushMode: 'add' | 'erase' = 'add';
   private brushSize = 7;
   private brushRingEl: HTMLElement | null = null;
@@ -1018,6 +1039,8 @@ export class AurumEditor extends AurumCore {
   private whitenStrengthRow: HTMLElement | null = null;
   private auxTicks: TickControl | null = null;
   private auxRow: HTMLElement | null = null;
+  private hairRow: HTMLElement | null = null;
+  private hairSwatches: HTMLButtonElement[] = [];
   private maskTransparentBtn: HTMLButtonElement | null = null;
   private maskInvertBtn: HTMLButtonElement | null = null;
   private maskHintEl: HTMLElement | null = null;
@@ -2350,6 +2373,27 @@ export class AurumEditor extends AurumCore {
     });
     this.auxRow = this.auxTicks.row;
     this.auxRow.style.display = 'none';
+    const hairRow = el('div', 'au-hair-row');
+    hairRow.style.display = 'none';
+    this.hairSwatches = [];
+    for (const preset of HAIR_PRESETS) {
+      const b = el('button', 'au-hair-swatch');
+      b.type = 'button';
+      b.style.background = preset.css;
+      b.setAttribute('aria-label', this.locale === 'en' ? preset.nameEn : preset.name);
+      b.title = this.locale === 'en' ? preset.nameEn : preset.name;
+      b.setAttribute('aria-pressed', String(this.hairColorId === preset.id));
+      b.classList.toggle('is-active', this.hairColorId === preset.id);
+      b.addEventListener('click', () => {
+        this.hairColorId = preset.id;
+        this.hairHue = 0;
+        for (const s of this.hairSwatches) s.classList.toggle('is-active', s === b);
+        this.drawRefinePreview();
+      });
+      hairRow.appendChild(b);
+      this.hairSwatches.push(b);
+    }
+    this.hairRow = hairRow;
     const actions = el('div', 'au-mask-actions');
     const cancelBtn = el('button', 'au-chip au-chip--danger');
     cancelBtn.type = 'button';
@@ -2360,7 +2404,7 @@ export class AurumEditor extends AurumCore {
     applyBtn.innerHTML = `<span>${this.s.brushApply}</span>`;
     applyBtn.addEventListener('click', () => void this.applyRefine());
     actions.append(cancelBtn, applyBtn);
-    toolbar.append(toolLabel, modeSeg, quickRow, hint, this.maskBrushTicks.row, this.whitenStrengthRow, this.auxRow, actions);
+    toolbar.append(toolLabel, modeSeg, quickRow, hint, this.maskBrushTicks.row, this.whitenStrengthRow, this.hairRow, this.auxRow, actions);
     this.maskToolbar = toolbar;
     pane.appendChild(toolbar);
   }
@@ -2510,7 +2554,10 @@ export class AurumEditor extends AurumCore {
   }
 
   private mixHairInto(data: Uint8ClampedArray, weights: Float32Array): void {
-    const shift = ((this.hairHue % 360) + 360) % 360;
+    const preset = HAIR_PRESETS.find((p) => p.id === this.hairColorId) ?? HAIR_PRESETS[1]!;
+    const targetHue = ((preset.hue + this.hairHue) % 360 + 360) % 360;
+    const targetSat = preset.sat;
+    const bright = preset.bright;
     const s = this.whitenStrength;
     for (let i = 0, j = 0; i < weights.length; i++, j += 4) {
       const m = Math.min(1, Math.max(0, weights[i] ?? 0)) * (0.35 + 0.65 * s);
@@ -2526,12 +2573,16 @@ export class AurumEditor extends AurumCore {
         hh *= 60;
         if (hh < 0) hh += 360;
       }
-      const sat = max <= 1e-6 ? 0 : d / max;
-      const val = max;
-      const nh = ((hh + shift) % 360 + 360) % 360;
-      const c = val * sat;
+      const origSat = max <= 1e-6 ? 0 : d / max;
+      // Tint: force target hue/sat, keep original value (shading) × preset brightness.
+      // For near-grey hair (sat ≈ 0) the forced sat makes the dye visible at all;
+      // pure hue rotation would have been invisible on black/brown hair.
+      const nh = targetHue;
+      const nsat = Math.max(origSat, targetSat);
+      const nval = Math.min(1, Math.max(0, max * bright));
+      const c = nval * nsat;
       const x = c * (1 - Math.abs(((nh / 60) % 2) - 1));
-      const mm = val - c;
+      const mm = nval - c;
       let rr = 0, gg = 0, bb = 0;
       if (nh < 60) { rr = c; gg = x; }
       else if (nh < 120) { rr = x; gg = c; }
@@ -2627,6 +2678,7 @@ export class AurumEditor extends AurumCore {
     if (this.maskInvertBtn) this.maskInvertBtn.style.display = retouch ? 'none' : '';
     if (this.maskTransparentBtn) this.maskTransparentBtn.style.display = retouch ? 'none' : '';
     if (this.whitenStrengthRow) this.whitenStrengthRow.style.display = retouch ? '' : 'none';
+    if (this.hairRow) this.hairRow.style.display = retouch && this.retouchEffect === 'hair' ? '' : 'none';
     const auxFor = retouch && (this.retouchEffect === 'tone' || this.retouchEffect === 'hair');
     if (this.auxRow) this.auxRow.style.display = auxFor ? '' : 'none';
     if (auxFor && this.auxTicks) {

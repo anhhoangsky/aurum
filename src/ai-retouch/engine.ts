@@ -217,6 +217,12 @@ function buildHairMaskFromFaces(source: AISource, faces: RetouchFaceBox[], maxSi
         const rx = f.w * 0.95, ry = f.h * 0.95;
         const dx = (u - cx) / Math.max(0.0001, rx), dy = (v - cy) / Math.max(0.0001, ry);
         headW = Math.max(headW, 1 - smoothstep(0.72, 1.05, Math.sqrt(dx * dx + dy * dy)));
+        // Long-hair extension below the chin, both sides of the face.
+        const below = v - (f.y + f.h);
+        if (below > 0 && below < f.h * 1.4 && Math.abs(u - (f.x + f.w * 0.5)) < f.w * 0.85) {
+          const sideW = (1 - smoothstep(0.6, 1.0, Math.abs(u - (f.x + f.w * 0.5)) / Math.max(0.0001, f.w * 0.85))) * (1 - smoothstep(0.9, 1.4, below / f.h));
+          headW = Math.max(headW, sideW * 0.9);
+        }
         // Carve out the face itself so skin isn't included.
         const fx = (u - (f.x + f.w * 0.5)) / Math.max(0.0001, f.w * 0.55);
         const fy = (v - (f.y + f.h * 0.55)) / Math.max(0.0001, f.h * 0.5);
