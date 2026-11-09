@@ -2401,7 +2401,7 @@ export class AurumEditor extends AurumCore {
       label: this.s.brushSizeMask,
       min: 1, max: 50, step: 1, tickStep: 1, defaultValue: this.brushSize,
       format: (v) => `${Math.round(v)}px`,
-      onInput: (v) => { this.brushSize = Math.round(v); this.updateBrushRing(); },
+      onInput: (v) => { this.brushSize = Math.round(v); this.showCenterBrushRing(); },
     });
     this.whitenStrengthTicks = this.makeTicks({
       label: this.s.retouchStrength,
@@ -2773,6 +2773,12 @@ export class AurumEditor extends AurumCore {
     }
   }
 
+  private brushRadiusMask(): number {
+    // Linear in brushSize (1..50) so the smallest brush is truly tiny for
+    // eyeliner/lip-edge work the old % of mask size could never reach.
+    return Math.max(1, this.brushSize * 1.0);
+  }
+
   private updateBrushRing(): void {
     if (!this.brushRingEl) return;
     if (!this.refineOn || this.brushZoom || !this.brushPointer || !this.refineCanvas) {
@@ -2783,8 +2789,8 @@ export class AurumEditor extends AurumCore {
     if (rect.width < 2 || rect.height < 2) return;
     const scaleX = rect.width / Math.max(1, this.refineMaskWidth);
     const scaleY = rect.height / Math.max(1, this.refineMaskHeight);
-    const radiusMask = Math.max(4, (this.brushSize / 100) * Math.min(this.refineMaskWidth, this.refineMaskHeight) * 2);
-    const r = Math.max(8, radiusMask * Math.min(scaleX, scaleY));
+    const radiusMask = this.brushRadiusMask();
+    const r = Math.max(3, radiusMask * Math.min(scaleX, scaleY));
     const d = r * 2;
     const x = this.brushPointer.x, y = this.brushPointer.y;
     this.brushRingEl.style.width = `${d}px`;
@@ -2796,6 +2802,15 @@ export class AurumEditor extends AurumCore {
   private hideBrushRing(): void {
     this.brushPointer = null;
     if (this.brushRingEl) this.brushRingEl.style.display = 'none';
+  }
+
+  /** Preview the current brush size at the photo centre while the size slider moves. */
+  private showCenterBrushRing(): void {
+    if (!this.refineOn || this.brushZoom) return;
+    const rect = this.imageDisplayRect() ?? this.displayCropRect();
+    if (!rect) return;
+    this.brushPointer = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    this.updateBrushRing();
   }
 
   private ensureRefineCanvas(): void {
@@ -2957,8 +2972,7 @@ export class AurumEditor extends AurumCore {
     const fy = clamp01((e.clientY - rect.top) / rect.height);
     const cx = fx * this.refineMaskWidth;
     const cy = fy * this.refineMaskHeight;
-    // brush radius in mask px: stage radius proportional to brushSize
-    const radius = Math.max(4, (this.brushSize / 100) * Math.min(this.refineMaskWidth, this.refineMaskHeight) * 2);
+    const radius = this.brushRadiusMask();
     this.brushDabLocal(cx, cy, radius, 0.9);
     this.drawRefinePreview();
     this.updateBrushRing();
