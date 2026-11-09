@@ -523,7 +523,7 @@ async function runRetouch(editor, context, mode) {
   // Return AI mask so UI enters brush mode (Giữ/Xoá adjust the weight) instead
   // of loading immediately.
   if (result.skinMask && result.skinMask.data?.length && result.skinMask.width > 0) {
-    const MAX = 1600;
+    const MAX = 1024;
     const k = Math.min(1, MAX / Math.max(result.skinMask.width, result.skinMask.height));
     const mw = Math.max(1, Math.round(result.skinMask.width * k));
     const mh = Math.max(1, Math.round(result.skinMask.height * k));
@@ -635,8 +635,8 @@ async function runBackground(editor, context, mode, modelId) {
   // All modes return mask for manual brush refine (UI composes final with bg handling)
   if (result.masks?.[0]) {
     const mask = result.masks[0];
-    // Downscale mask to 1600px max for transfer/memory, UI upscales on apply
-    const MAX = 1600;
+    // Downscale mask to 1024px max for transfer/memory, UI upscales on apply
+    const MAX = 1024;
     const k = Math.min(1, MAX / Math.max(mask.width, mask.height));
     const mw = Math.max(1, Math.round(mask.width * k));
     const mh = Math.max(1, Math.round(mask.height * k));

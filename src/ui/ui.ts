@@ -2677,7 +2677,7 @@ export class AurumEditor extends AurumCore {
     const uv = this.cropUVRect();
     const cropW = Math.max(1, Math.round((uv.u1 - uv.u0) * this.refineWidth));
     const cropH = Math.max(1, Math.round((uv.v1 - uv.v0) * this.refineHeight));
-    const maxSide = 1080;
+    const maxSide = 720;
     const k = Math.min(1, maxSide / Math.max(cropW, cropH));
     const w = Math.max(1, Math.round(cropW * k));
     const h = Math.max(1, Math.round(cropH * k));
@@ -2848,7 +2848,7 @@ export class AurumEditor extends AurumCore {
       e.preventDefault();
       try { c.setPointerCapture(e.pointerId); } catch {}
       if (this.refineMask) this.refineHistory.push(new Float32Array(this.refineMask));
-      if (this.refineHistory.length > 20) this.refineHistory.shift();
+      if (this.refineHistory.length > 6) this.refineHistory.shift();
       this.refineStroke = { pointerId: e.pointerId, snapshotTaken: true };
       this.brushAt(e);
     };
@@ -3010,7 +3010,7 @@ export class AurumEditor extends AurumCore {
   private refineInvert(): void {
     if (!this.refineOn || !this.refineMask || this.refineKind === 'retouch') return;
     this.refineHistory.push(new Float32Array(this.refineMask));
-    if (this.refineHistory.length > 20) this.refineHistory.shift();
+    if (this.refineHistory.length > 6) this.refineHistory.shift();
     const data = this.refineMask;
     for (let i = 0; i < data.length; i++) {
       data[i] = 1 - (data[i] ?? 0);
