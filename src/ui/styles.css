@@ -1023,6 +1023,10 @@
 .au-quick-row::-webkit-scrollbar{display:none}
 .au-quick-chip{flex:0 0 auto;height:36px;padding:0 14px;border-radius:11px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);color:#e8e4db;font-size:12px;font-weight:650}
 .au-quick-chip[aria-pressed="true"]{background:rgba(243,199,123,.16);border-color:rgba(243,199,123,.45);color:var(--au-gold)}
+.au-quick-chip--icon{display:inline-flex;align-items:center;gap:6px}
+.au-quick-chip--icon svg{width:14px;height:14px}
+.au-quick-chip--icon.is-active{background:linear-gradient(180deg,#f9d693,#e2ad52);color:#2a1c06;border-color:rgba(255,235,190,.6)}
+.au-root.au-text-placing .au-canvas{cursor:copy}
 .au-text-arrange{display:flex;align-items:center;gap:8px;margin-top:4px}
 .au-align-seg{grid-template-columns:repeat(3,1fr)!important;flex:1 1 auto;margin:0}
 .au-textnode .au-text-hud{position:absolute;inset:-6px;border:1px dashed rgba(243,199,123,.7);border-radius:10px;pointer-events:none;opacity:0}

@@ -930,6 +930,8 @@ export class AurumEditor extends AurumCore {
   private textLayer!: HTMLElement;
   private texts: AurumTextLayer[] = [];
   private selectedTextId: string | null = null;
+  private textPlacing = false;
+  private textPlaceBtn!: HTMLButtonElement;
   private textInput!: HTMLTextAreaElement;
   private textSizeTicks!: TickControl;
   private textOpacityTicks!: TickControl;
@@ -1878,24 +1880,7 @@ export class AurumEditor extends AurumCore {
 
   // ---------------------------------------------------------------- text pane
   private buildTextPane(pane: HTMLElement): void {
-    const top = el('div', 'au-deck__row au-deck__row--top au-text-top');
-    const hint = el('span', 'au-text-hint');
-    hint.textContent = this.s.textTitle;
-    const add = el('button', 'au-add-text au-glass au-glass--gold');
-    add.type = 'button';
-    add.innerHTML = `${icon('plus')}<span>${this.s.addText}</span>`;
-    add.addEventListener('click', () => this.addTextLayer());
-    top.append(hint, add);
-    pane.appendChild(top);
-
-    const sub = el('div', 'au-text-sub');
-    sub.innerHTML = `<span>${escHtml(this.s.textPinch)}</span><span class="au-text-dot">·</span><span>${escHtml(this.s.textDoubleTap)}</span>`;
-    pane.appendChild(sub);
-
-    // Tap-on-image to type: no dock textarea — the editor floats on the photo itself.
-    const body = el('div', 'au-text-body');
-    body.innerHTML = `<span class="au-text-tap-hint">${escHtml(this.locale === 'vi' ? 'Chạm vào ảnh để đặt chữ • Kéo 2 tay hoặc handle để phóng/xoay' : 'Tap on photo to place text • Pinch or use handles to resize/rotate')}</span>`;
-    pane.appendChild(body);
+    // Compact: quick-row is the entry — plus icon toggles place mode
     // Keep a hidden input for compatibility (fully controlled via overlay editor)
     const input = document.createElement('textarea');
     input.className = 'au-text-input';
@@ -1917,10 +1902,22 @@ export class AurumEditor extends AurumCore {
 
     // Quick styles — Meitu style single-tap presets (Apple: Familiarity + Craft)
     const quick = el('div', 'au-quick-styles');
-    const quickLabel = el('span', 'au-quick-label');
-    quickLabel.textContent = this.s.textQuick;
-    quick.appendChild(quickLabel);
     const quickRow = el('div', 'au-quick-row');
+    // Place-mode toggle: tap to enable; next tap on photo creates a text there.
+    const placeBtn = el('button', 'au-quick-chip au-quick-chip--icon');
+    placeBtn.type = 'button';
+    placeBtn.innerHTML = `${icon('plus')}<span>${this.locale === 'vi' ? 'Chạm đặt' : 'Place'}</span>`;
+    placeBtn.setAttribute('aria-pressed', 'false');
+    placeBtn.title = this.locale === 'vi' ? 'Bật chế độ: chạm vào ảnh để đặt chữ' : 'Toggle: tap photo to place text';
+    placeBtn.addEventListener('click', () => {
+      this.textPlacing = !this.textPlacing;
+      placeBtn.setAttribute('aria-pressed', String(this.textPlacing));
+      placeBtn.classList.toggle('is-active', this.textPlacing);
+      this.root.classList.toggle('au-text-placing', this.textPlacing);
+      this.toast(this.textPlacing ? (this.locale === 'vi' ? 'Chạm vào ảnh để đặt chữ mới' : 'Tap photo to place text') : (this.locale === 'vi' ? 'Tắt chế độ đặt chữ' : 'Place mode off'), false);
+    });
+    this.textPlaceBtn = placeBtn;
+    quickRow.appendChild(placeBtn);
     const styleDefs = [
       { id: 'title', label: this.s.textStyleTitle },
       { id: 'bold', label: this.s.textStyleTitle2 },
@@ -1988,30 +1985,6 @@ export class AurumEditor extends AurumCore {
     meta.append(fontSeg, colorWrap);
     pane.appendChild(meta);
 
-    // Arrange row (align left/center/right) + toggles
-    const arrangeRow = el('div', 'au-text-arrange');
-    const arrangeLabel = el('span', 'au-quick-label');
-    arrangeLabel.textContent = this.s.textArrange;
-    arrangeRow.appendChild(arrangeLabel);
-    const alignSeg = el('div', 'au-seg au-align-seg');
-    for (const a of ['left','center','right'] as const) {
-      const b = el('button', 'au-font-btn');
-      b.type = 'button';
-      b.textContent = a === 'left' ? this.s.textAlignLeft : a === 'center' ? this.s.textAlignCenter : this.s.textAlignRight;
-      b.dataset.align = a;
-      b.setAttribute('aria-pressed', String(a === 'center'));
-      b.addEventListener('click', () => {
-        const layer = this.selectedLayer();
-        if (!layer) return;
-        layer.align = a;
-        for (const child of Array.from(alignSeg.children)) child.setAttribute('aria-pressed', String(child === b));
-        this.syncTextLayerEl(layer);
-      });
-      alignSeg.appendChild(b);
-    }
-    arrangeRow.appendChild(alignSeg);
-    pane.appendChild(arrangeRow);
-
     const toggles = el('div', 'au-text-toggles');
     const mkToggle = (label: string, get: () => boolean, set: (v: boolean) => void) => {
       const b = el('button', 'au-chip');
@@ -2045,9 +2018,10 @@ export class AurumEditor extends AurumCore {
     // Direct manipulation controls live ON the text (handles). Only opacity stays
     // as a slider — size/rotation are grabbed on the photo (Apple §2).
     const sliders = el('div', 'au-text-sliders');
+    // Synced with Adjust/Tune: ruler mode, same tick density (step 2) and tall majors
     this.textOpacityTicks = this.makeTicks({
       label: this.s.textOpacity,
-      min: 10, max: 100, step: 1, tickStep: 3, defaultValue: 100,
+      min: 10, max: 100, step: 1, tickStep: 2, defaultValue: 100, ruler: true,
       format: (v) => `${v}%`,
       onInput: (v) => { const l = this.selectedLayer(); if (l) { l.opacity = v / 100; this.syncTextLayerEl(l); } },
     });
@@ -3246,6 +3220,7 @@ export class AurumEditor extends AurumCore {
 
   private tapToPlaceText = (event: PointerEvent): void => {
     if (this.currentTab !== 'text' || !this.isReady) return;
+    if (!this.textPlacing) return;
     // Only when tapping empty stage (not on an existing text node)
     const target = event.target as HTMLElement | null;
     if (target?.closest('.au-textnode, .au-ticks, .au-tabs, .au-deck')) return;
@@ -3266,6 +3241,11 @@ export class AurumEditor extends AurumCore {
     this.syncTextControls(layer);
     this.positionTexts();
     this.openInlineTextEditor(node, layer);
+    // One-shot: placing consumes itself after a successful tap
+    this.textPlacing = false;
+    this.textPlaceBtn?.setAttribute('aria-pressed', 'false');
+    this.textPlaceBtn?.classList.remove('is-active');
+    this.root.classList.remove('au-text-placing');
   };
 
   private syncTextLayerStyle(node: HTMLElement, layer: AurumTextLayer): void {
@@ -3287,7 +3267,11 @@ export class AurumEditor extends AurumCore {
   private syncTextControls(layer: AurumTextLayer): void {
     if (this.textInput) this.textInput.value = layer.text;
     if (this.textSizeTicks) this.textSizeTicks.set(Math.round(layer.size * 100), false);
-    if (this.textOpacityTicks) this.textOpacityTicks.set(Math.round(layer.opacity * 100), false);
+    if (this.textOpacityTicks) {
+      // Avoid fighting the user's finger: only overwrite when not actively dragging
+      const isDragging = document.activeElement === this.textOpacityTicks.rail;
+      if (!isDragging) this.textOpacityTicks.set(Math.round(layer.opacity * 100), false);
+    }
     if (this.textRotateTicks) this.textRotateTicks.set(Math.round(layer.rotation), false);
     for (const node of Array.from(this.textLayer.querySelectorAll<HTMLElement>('.au-textnode'))) {
       const l = this.texts.find((t) => t.id === node.dataset.textId);
@@ -3626,6 +3610,12 @@ export class AurumEditor extends AurumCore {
 
   private setTab(tab: TabId): void {
     if (tab !== 'adjust') this.setLiquify(false);
+    if (tab !== 'text' && this.textPlacing) {
+      this.textPlacing = false;
+      this.textPlaceBtn?.setAttribute('aria-pressed', 'false');
+      this.textPlaceBtn?.classList.remove('is-active');
+      this.root.classList.remove('au-text-placing');
+    }
     if (tab !== 'crop') {
       if (this.cropDrag) this.endCropDrag();
       this.clearTransient();
