@@ -228,6 +228,7 @@ const STRINGS = {
     brushLabel: 'Cọ',
     brushAdd: 'Giữ (thêm)',
     brushErase: 'Xoá',
+    brushZoom: 'Thu phóng',
     brushSizeMask: 'Kích thước cọ',
     retouchStrength: 'Độ trắng',
     brushUndo: 'Hoàn tác nét',
@@ -467,6 +468,7 @@ const STRINGS = {
     brushLabel: 'Brush',
     brushAdd: 'Keep (add)',
     brushErase: 'Erase',
+    brushZoom: 'Zoom',
     brushSizeMask: 'Brush size',
     retouchStrength: 'Whiten strength',
     brushUndo: 'Undo stroke',
@@ -1028,9 +1030,13 @@ export class AurumEditor extends AurumCore {
   private hairHue = 0;
   private hairColorId = 'brown';
   private brushMode: 'add' | 'erase' = 'add';
+  private brushZoom = false;
   private brushSize = 7;
   private brushRingEl: HTMLElement | null = null;
   private brushPointer: { x: number; y: number } | null = null;
+  private zoomBtn: HTMLButtonElement | null = null;
+  private addBtn: HTMLButtonElement | null = null;
+  private eraseBtn: HTMLButtonElement | null = null;
   private refineHistory: Float32Array[] = [];
   private refineStroke: { pointerId: number; snapshotTaken: boolean } | null = null;
   private maskToolbar!: HTMLElement;
@@ -2308,17 +2314,37 @@ export class AurumEditor extends AurumCore {
     eraseBtn.type = 'button';
     eraseBtn.innerHTML = `${icon('eraser')}<span>${this.s.brushErase}</span>`;
     eraseBtn.setAttribute('aria-pressed', 'false');
+    const zoomBtn = el('button', 'au-mask-btn');
+    zoomBtn.type = 'button';
+    zoomBtn.innerHTML = `${icon('image')}<span>${this.s.brushZoom}</span>`;
+    zoomBtn.setAttribute('aria-pressed', 'false');
+    zoomBtn.setAttribute('aria-label', this.s.brushZoom);
+    this.addBtn = addBtn;
+    this.eraseBtn = eraseBtn;
+    this.zoomBtn = zoomBtn;
+    const syncToolBtns = (): void => {
+      addBtn.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'add'));
+      eraseBtn.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'erase'));
+      zoomBtn.setAttribute('aria-pressed', String(this.brushZoom));
+      if (this.refineCanvas) this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
+      if (this.brushZoom) this.hideBrushRing();
+      this.updateBrushRing();
+    };
     addBtn.addEventListener('click', () => {
+      this.brushZoom = false;
       this.brushMode = 'add';
-      addBtn.setAttribute('aria-pressed', 'true');
-      eraseBtn.setAttribute('aria-pressed', 'false');
+      syncToolBtns();
     });
     eraseBtn.addEventListener('click', () => {
+      this.brushZoom = false;
       this.brushMode = 'erase';
-      eraseBtn.setAttribute('aria-pressed', 'true');
-      addBtn.setAttribute('aria-pressed', 'false');
+      syncToolBtns();
     });
-    modeSeg.append(addBtn, eraseBtn);
+    zoomBtn.addEventListener('click', () => {
+      this.brushZoom = !this.brushZoom;
+      syncToolBtns();
+    });
+    modeSeg.append(addBtn, eraseBtn, zoomBtn);
     const quickRow = el('div', 'au-mask-quickrow');
     const undoBtn = el('button', 'au-chip');
     undoBtn.type = 'button';
@@ -2699,7 +2725,7 @@ export class AurumEditor extends AurumCore {
 
   private updateBrushRing(): void {
     if (!this.brushRingEl) return;
-    if (!this.refineOn || !this.brushPointer || !this.refineCanvas) {
+    if (!this.refineOn || this.brushZoom || !this.brushPointer || !this.refineCanvas) {
       this.brushRingEl.style.display = 'none';
       return;
     }
@@ -2727,13 +2753,18 @@ export class AurumEditor extends AurumCore {
     const c = document.createElement('canvas');
     c.className = 'au-maskprev';
     c.setAttribute('aria-hidden', 'true');
+    // Brush owns single-finger input; stage pan/pinch is ignored on this canvas
+    // so the photo cannot drift while painting. Zoom mode removes the hit
+    // target (pointerEvents none) so stage gestures take over.
+    c.dataset.gestureIgnore = 'true';
+    c.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
     const ring = el('div', 'au-brush-ring au-mask-ring');
     ring.setAttribute('aria-hidden', 'true');
     this.stage.appendChild(ring);
     this.brushRingEl = ring;
     // pointer handlers for brush (Apple: 1:1, offset preserved, capture)
     const onDown = (e: PointerEvent) => {
-      if (!this.refineOn) return;
+      if (!this.refineOn || this.brushZoom) return;
       e.preventDefault();
       try { c.setPointerCapture(e.pointerId); } catch {}
       if (this.refineMask) this.refineHistory.push(new Float32Array(this.refineMask));
@@ -2742,6 +2773,7 @@ export class AurumEditor extends AurumCore {
       this.brushAt(e);
     };
     const onMove = (e: PointerEvent) => {
+      if (this.brushZoom) return;
       // Hover ring for mouse (size preview before painting); touch paints.
       if (e.pointerType === 'mouse' && !this.refineStroke) {
         const stageRect = this.stage.getBoundingClientRect();
@@ -2769,6 +2801,7 @@ export class AurumEditor extends AurumCore {
   private showBrush(): void {
     this.ensureRefineCanvas();
     this.refineCanvas.style.display = 'block';
+    this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
     this.maskToolbar.style.display = 'block';
     // Hide model + action list while refining (dock becomes mask tools only)
     for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
@@ -2818,7 +2851,7 @@ export class AurumEditor extends AurumCore {
   }
 
   private brushAt(e: PointerEvent): void {
-    if (!this.refineCanvas || !this.refineMask) return;
+    if (!this.refineCanvas || !this.refineMask || this.brushZoom) return;
     const rect = this.refineCanvas.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return;
     const stageRect = this.stage.getBoundingClientRect();
