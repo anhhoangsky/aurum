@@ -8,7 +8,7 @@ import type {
   ImageSource,
   Size,
 } from '../core/types';
-import { ADJUST_RANGES, clamp } from '../core/state';
+import { ADJUST_RANGES, clamp, defaultEnhance } from '../core/state';
 import { isAbortError } from '../core/async';
 import { PRESETS, presetThumbnail } from '../core/color';
 import type { PresetCategory } from '../core/color';
@@ -975,6 +975,7 @@ export class AurumEditor extends AurumCore {
   private peekBtn: HTMLButtonElement | null = null;
   private peekCanvas: HTMLCanvasElement | null = null;
   private peekOn = false;
+  private peekSavedState: EditorState | null = null;
   private paramsEl!: HTMLElement;
   private filterWrap!: HTMLElement;
   private filterCats!: HTMLElement;
@@ -4041,43 +4042,39 @@ export class AurumEditor extends AurumCore {
     this.peekOn = on;
     this.peekBtn?.classList.toggle('is-on', on);
     this.peekBtn?.setAttribute('aria-pressed', String(on));
+    if (this.peekCanvas) this.peekCanvas.style.display = 'none';
     if (!on) {
-      if (this.peekCanvas) this.peekCanvas.style.display = 'none';
-      // Restore WebGL only if not in brush mode (brush hides it separately).
-      if (!this.refineOn) this.canvas.style.visibility = '';
+      // Restore the edited state silently (no history entry, no UI resync).
+      if (this.peekSavedState) {
+        const saved = this.peekSavedState;
+        this.peekSavedState = null;
+        try {
+          this.setState(saved, { history: false, silent: true });
+        } catch {
+          // Headless/test harness.
+        }
+        // Re-sync sliders to the restored (edited) values.
+        this.syncUI();
+      }
       return;
     }
     if (!this.isReady) return;
-    const source = this.sourceBitmap();
-    if (!source) return;
-    // Hide the edited WebGL photo so the original overlay cannot ghost or
-    // jitter against it — same trick as brush mode (single layer only).
-    this.canvas.style.visibility = 'hidden';
-    const size = this.source();
-    const stageSize = this.stage.clientWidth || 1;
-    const stageH = this.stage.clientHeight || 1;
-    if (!this.peekCanvas) {
-      const c = document.createElement('canvas');
-      c.className = 'au-peekprev';
-      c.setAttribute('aria-hidden', 'true');
-      this.stage.appendChild(c);
-      this.peekCanvas = c;
+    // Show the untouched original through the same WebGL shader (identity
+    // filter/adjust/enhance) instead of a second canvas — one layer only, so
+    // it can never ghost, jitter or sit offset from the edited photo.
+    const saved = this.getState();
+    this.peekSavedState = saved;
+    const zeroAdjust = Object.fromEntries(
+      Object.keys(saved.adjust).map((key) => [key, 0]),
+    ) as unknown as EditorState['adjust'];
+    try {
+      this.setState(
+        { ...saved, filter: 'original', adjust: zeroAdjust, enhance: defaultEnhance(), retouch: { liquify: [] } },
+        { history: false, silent: true },
+      );
+    } catch {
+      this.peekSavedState = null;
     }
-    const canvas = this.peekCanvas;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const maxSide = 1600;
-    const k = Math.min(1, maxSide / Math.max(1, size.width, size.height));
-    const w = Math.max(1, Math.round(size.width * k));
-    const h = Math.max(1, Math.round(size.height * k));
-    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-    const rect = this.imageDisplayRect() ?? this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
-    canvas.style.left = `${rect.x}px`;
-    canvas.style.top = `${rect.y}px`;
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
-    ctx.drawImage(source, 0, 0, size.width, size.height, 0, 0, w, h);
-    canvas.style.display = 'block';
   }
 
   /** Display rect of the full source image (including zoom/pan), in stage CSS px. */
