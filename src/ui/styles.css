@@ -593,6 +593,14 @@
   box-shadow:0 0 0 1px rgba(243,199,123,.5),0 8px 22px rgba(226,173,82,.22);
 }
 .au-filter span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-filter-sep{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:rgba(255,255,255,.45);font-size:7px;font-weight:700;letter-spacing:.35px;text-transform:uppercase;white-space:nowrap;pointer-events:none}
+.au-filter-sep::before{content:"";width:1px;height:20px;border-radius:1px;background:linear-gradient(180deg,transparent,rgba(255,255,255,.35),transparent)}
+.au-filter-sep b{font:inherit}
+.au-filter--saved{border-style:dashed!important}
+.au-filter--saved canvas{box-shadow:0 5px 16px rgba(0,0,0,.35),inset 0 0 0 1px rgba(243,199,123,.25)}
+.au-filter--saved-del{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;background:#3a3a40;color:#f0a390;display:grid;place-items:center;font-size:10px;font-weight:800;line-height:1}
+.au-filter--saved{position:relative}
+.au-saved__head--inline{border-top:1px solid rgba(255,255,255,.07);padding-top:8px;margin-top:8px}
 .au-filter--reset{position:sticky;left:0;z-index:3;background:rgba(20,20,24,.92);border-radius:12px;border:1px solid rgba(243,199,123,.35);box-shadow:0 5px 16px rgba(0,0,0,.35)}
 .au-filter--reset svg{width:18px;height:18px;color:var(--au-gold)}
 .au-filter--reset:active{transform:scale(.96)}

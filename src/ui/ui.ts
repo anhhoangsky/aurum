@@ -168,6 +168,7 @@ const STRINGS = {
     savePreset: 'Lưu bộ lọc',
     presetName: 'Tên bộ lọc…',
     savedPresets: 'Đã lưu',
+    defaultFilters: 'Mặc định',
     noSaved: 'Chưa có bộ lọc đã lưu. Tuỳ chỉnh màu rồi bấm Lưu.',
     apply: 'Áp dụng',
     deletePreset: 'Xoá',
@@ -397,6 +398,7 @@ const STRINGS = {
     savePreset: 'Save filter',
     presetName: 'Filter name…',
     savedPresets: 'Saved',
+    defaultFilters: 'Default',
     noSaved: 'No saved filters yet. Tune the look, then tap Save.',
     apply: 'Apply',
     deletePreset: 'Delete',
@@ -1811,34 +1813,10 @@ export class AurumEditor extends AurumCore {
       },
     });
     tuneContext.appendChild(this.filterTuneTicks.row);
-    tuneBody.append(tuneReset, tuneRow, tuneContext);
-    tuneHead.addEventListener('click', (e) => {
-      // Keep Reset clickable without toggling
-      if ((e.target as HTMLElement).closest('.au-tune__reset')) return;
-      const open = tuneBody.hidden;
-      tuneBody.hidden = !open;
-      tuneHead.setAttribute('aria-expanded', String(open));
-      tuneChevron.textContent = open ? '▴' : '▾';
-      tune.classList.toggle('is-open', open);
-      if (open) window.requestAnimationFrame(() => this.selectFilterTune(this.filterTuneKey));
-    });
-    this.filterTuneWrap = tune;
-    tune.append(tuneHead, tuneBody);
-    pane.appendChild(tune);
-    this.selectFilterTune(this.filterTuneKey);
-
-    // --- Saved filters (localStorage, per-device Aurum only) — collapsible ---
-    const saved = el('div', 'au-saved au-collapsible');
-    const savedHeadBtn = el('button', 'au-collapsible__head');
-    savedHeadBtn.type = 'button';
-    savedHeadBtn.setAttribute('aria-expanded', 'false');
-    const savedHead = el('div', 'au-saved__head');
+    // Saved head inside Tune (user request: put ĐÃ LƯU + Lưu into Tùy chỉnh)
+    const savedHead = el('div', 'au-saved__head au-saved__head--inline');
     const savedTitle = el('span', 'au-saved__title');
     savedTitle.textContent = this.s.savedPresets;
-    const savedChev = el('span', 'au-chev');
-    savedChev.textContent = '▾';
-    savedHead.append(savedTitle, savedChev);
-    savedHeadBtn.append(savedHead);
     const nameInput = document.createElement('input');
     nameInput.className = 'au-saved__input';
     nameInput.type = 'text';
@@ -1856,25 +1834,27 @@ export class AurumEditor extends AurumCore {
       if (e.key === 'Enter') this.saveCurrentPreset(nameInput);
     });
     savedHead.append(savedTitle, nameInput, saveBtn);
-    const savedBody = el('div', 'au-collapsible__body');
-    savedBody.hidden = true;
-    const list = el('div', 'au-saved__list');
-    this.savedList = list;
-    this.savedWrap = saved;
+    const hiddenList = el('div', 'au-saved__list');
+    hiddenList.style.display = 'none';
+    this.savedList = hiddenList;
+    this.savedWrap = hiddenList;
     this.filterNameInput = nameInput;
     this.filterSaveBtn = saveBtn;
-    savedBody.append(list);
-    savedHeadBtn.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('.au-saved__input, .au-save-preset')) return;
-      const open = savedBody.hidden;
-      savedBody.hidden = !open;
-      savedHeadBtn.setAttribute('aria-expanded', String(open));
-      savedChev.textContent = open ? '▴' : '▾';
-      saved.classList.toggle('is-open', open);
+    tuneBody.append(savedHead, hiddenList, tuneReset, tuneRow, tuneContext);
+    tuneHead.addEventListener('click', (e) => {
+      // Keep Reset clickable without toggling
+      if ((e.target as HTMLElement).closest('.au-tune__reset')) return;
+      const open = tuneBody.hidden;
+      tuneBody.hidden = !open;
+      tuneHead.setAttribute('aria-expanded', String(open));
+      tuneChevron.textContent = open ? '▴' : '▾';
+      tune.classList.toggle('is-open', open);
+      if (open) window.requestAnimationFrame(() => this.selectFilterTune(this.filterTuneKey));
     });
-    saved.append(savedHeadBtn, savedBody);
-    pane.appendChild(saved);
-    this.renderSavedPresets();
+    this.filterTuneWrap = tune;
+    tune.append(tuneHead, tuneBody);
+    pane.appendChild(tune);
+    this.selectFilterTune(this.filterTuneKey);
   }
 
   private selectFilterTune(key: keyof Adjustments): void {
@@ -3019,35 +2999,7 @@ export class AurumEditor extends AurumCore {
 
   private renderSavedPresets(): void {
     if (!this.savedList) return;
-    this.savedList.replaceChildren();
-    if (!this.userPresets.length) {
-      const empty = el('div', 'au-saved__empty');
-      empty.textContent = this.s.noSaved;
-      this.savedList.appendChild(empty);
-      return;
-    }
-    for (const p of this.userPresets) {
-      const card = el('div', 'au-saved-card');
-      const label = el('span', 'au-saved-card__label');
-      label.textContent = p.name;
-      const apply = el('button', 'au-saved-card__apply');
-      apply.type = 'button';
-      apply.textContent = this.s.apply;
-      apply.setAttribute('aria-label', `${this.s.apply}: ${p.name}`);
-      apply.addEventListener('click', () => this.applyUserPreset(p));
-      const del = el('button', 'au-saved-card__del au-icon au-glass');
-      del.type = 'button';
-      del.innerHTML = icon('trash');
-      del.setAttribute('aria-label', `${this.s.deletePreset}: ${p.name}`);
-      del.addEventListener('click', () => {
-        this.userPresets = this.userPresets.filter((x) => x.id !== p.id);
-        storeUserPresets(this.userPresets);
-        this.renderSavedPresets();
-        this.toast(this.s.presetDeleted);
-      });
-      card.append(label, apply, del);
-      this.savedList.appendChild(card);
-    }
+    this.buildFilters();
   }
 
   private applyUserPreset(p: UserPreset): void {
@@ -4190,14 +4142,50 @@ export class AurumEditor extends AurumCore {
     const current = this.getState().filter;
     this.filterWrap.replaceChildren();
     this.filterButtons.clear();
-    // Reset pinned as sticky first item — always visible while scrolling the rail
-    const resetBtn = el('button', 'au-filter au-filter--reset');
-    resetBtn.type = 'button';
-    resetBtn.innerHTML = `${icon('reset')}<span>${this.s.resetFilter}</span>`;
-    resetBtn.setAttribute('aria-label', this.s.resetFilter);
-    resetBtn.setAttribute('title', this.s.resetFilter);
-    resetBtn.addEventListener('click', () => this.setFilter('original'));
-    this.filterWrap.appendChild(resetBtn);
+    // Saved presets first (like a personal row), separated from defaults by label
+    if (this.userPresets.length) {
+      for (const p of this.userPresets) {
+        const button = el('button', 'au-filter au-filter--saved');
+        button.type = 'button';
+        // Thumbnail approximated from saved filter colour alone (fast)
+        const canvas = presetThumbnail(bitmap, size.width, size.height, p.filter || 'original');
+        const label = el('span');
+        label.textContent = p.name;
+        button.append(canvas, label);
+        const isActiveSaved = current === (p.filter || 'original');
+        button.setAttribute('aria-pressed', String(isActiveSaved && this.getState().filter === p.filter));
+        button.setAttribute('aria-label', `${p.name}`);
+        button.title = `${p.name}`;
+        button.addEventListener('click', () => this.applyUserPreset(p));
+        button.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          this.userPresets = this.userPresets.filter((x) => x.id !== p.id);
+          storeUserPresets(this.userPresets);
+          this.renderSavedPresets();
+          this.buildFilters();
+          this.toast(this.s.presetDeleted);
+        });
+        // small trash dot inside
+        const trash = el('span', 'au-filter--saved-del');
+        trash.textContent = '×';
+        trash.setAttribute('aria-hidden', 'true');
+        trash.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.userPresets = this.userPresets.filter((x) => x.id !== p.id);
+          storeUserPresets(this.userPresets);
+          this.renderSavedPresets();
+          this.buildFilters();
+          this.toast(this.s.presetDeleted);
+        });
+        button.appendChild(trash);
+        this.filterWrap.appendChild(button);
+      }
+      const sep = el('span', 'au-filter-sep');
+      const sepLabel = el('b');
+      sepLabel.textContent = this.s.defaultFilters;
+      sep.appendChild(sepLabel);
+      this.filterWrap.appendChild(sep);
+    }
     const visible = PRESETS.filter(
       (preset) => this.filterCat === 'all' || preset.category === this.filterCat,
     );
