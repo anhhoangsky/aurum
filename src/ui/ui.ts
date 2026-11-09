@@ -229,6 +229,9 @@ const STRINGS = {
     brushAdd: 'Giữ (thêm)',
     brushErase: 'Xoá',
     brushZoom: 'Thu phóng',
+    zoomHint: 'Thu phóng: chụm 2 ngón để phóng/xoay, kéo 1 ngón để di, chạm đúp để phóng to.',
+    zoomIn: 'Phóng to',
+    zoomOut: 'Thu nhỏ',
     brushSizeMask: 'Kích thước cọ',
     retouchStrength: 'Độ trắng',
     brushUndo: 'Hoàn tác nét',
@@ -469,6 +472,9 @@ const STRINGS = {
     brushAdd: 'Keep (add)',
     brushErase: 'Erase',
     brushZoom: 'Zoom',
+    zoomHint: 'Zoom: pinch to zoom/rotate, drag to pan, double-tap to zoom in.',
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
     brushSizeMask: 'Brush size',
     retouchStrength: 'Whiten strength',
     brushUndo: 'Undo stroke',
@@ -1035,6 +1041,8 @@ export class AurumEditor extends AurumCore {
   private brushRingEl: HTMLElement | null = null;
   private brushPointer: { x: number; y: number } | null = null;
   private zoomBtn: HTMLButtonElement | null = null;
+  private zoomInBtn: HTMLButtonElement | null = null;
+  private zoomOutBtn: HTMLButtonElement | null = null;
   private addBtn: HTMLButtonElement | null = null;
   private eraseBtn: HTMLButtonElement | null = null;
   private refineHistory: Float32Array[] = [];
@@ -2351,6 +2359,20 @@ export class AurumEditor extends AurumCore {
     });
     modeSeg.append(addBtn, eraseBtn, zoomBtn);
     const quickRow = el('div', 'au-mask-quickrow');
+    const zoomOutBtn = el('button', 'au-chip');
+    zoomOutBtn.type = 'button';
+    zoomOutBtn.innerHTML = `${icon('image')}<span>${this.s.zoomOut}</span>`;
+    zoomOutBtn.setAttribute('aria-label', this.s.zoomOut);
+    zoomOutBtn.style.display = 'none';
+    zoomOutBtn.addEventListener('click', () => this.stepZoom(1 / 1.5));
+    const zoomInBtn = el('button', 'au-chip');
+    zoomInBtn.type = 'button';
+    zoomInBtn.innerHTML = `${icon('image')}<span>${this.s.zoomIn}</span>`;
+    zoomInBtn.setAttribute('aria-label', this.s.zoomIn);
+    zoomInBtn.style.display = 'none';
+    zoomInBtn.addEventListener('click', () => this.stepZoom(1.5));
+    this.zoomOutBtn = zoomOutBtn;
+    this.zoomInBtn = zoomInBtn;
     const undoBtn = el('button', 'au-chip');
     undoBtn.type = 'button';
     undoBtn.innerHTML = `${icon('undo')}<span>${this.s.brushUndo}</span>`;
@@ -2370,7 +2392,7 @@ export class AurumEditor extends AurumCore {
     transparentBtn.addEventListener('click', () => this.refineToggleTransparent());
     this.maskTransparentBtn = transparentBtn;
     this.maskInvertBtn = invertBtn;
-    quickRow.append(undoBtn, invertBtn, transparentBtn);
+    quickRow.append(zoomOutBtn, zoomInBtn, undoBtn, invertBtn, transparentBtn);
     const hint = el('div', 'au-mask-hint');
     hint.textContent = this.s.brushHint;
     this.maskHintEl = hint;
@@ -2711,8 +2733,10 @@ export class AurumEditor extends AurumCore {
 
   private syncBrushChrome(): void {
     const retouch = this.refineKind === 'retouch';
-    if (this.maskInvertBtn) this.maskInvertBtn.style.display = retouch ? 'none' : '';
-    if (this.maskTransparentBtn) this.maskTransparentBtn.style.display = retouch ? 'none' : '';
+    if (this.maskInvertBtn) this.maskInvertBtn.style.display = retouch || this.brushZoom ? 'none' : '';
+    if (this.maskTransparentBtn) this.maskTransparentBtn.style.display = retouch || this.brushZoom ? 'none' : '';
+    if (this.zoomInBtn) this.zoomInBtn.style.display = this.brushZoom ? '' : 'none';
+    if (this.zoomOutBtn) this.zoomOutBtn.style.display = this.brushZoom ? '' : 'none';
     if (this.whitenStrengthRow) this.whitenStrengthRow.style.display = retouch ? '' : 'none';
     if (this.hairRow) this.hairRow.style.display = retouch && this.retouchEffect === 'hair' ? '' : 'none';
     const auxFor = retouch && (this.retouchEffect === 'tone' || this.retouchEffect === 'hair');
@@ -2728,9 +2752,24 @@ export class AurumEditor extends AurumCore {
         this.auxTicks.set(this.toneWarm, false);
       }
     }
-    if (this.maskHintEl) this.maskHintEl.textContent = retouch ? this.s.retouchBrushHint : this.s.brushHint;
+    if (this.maskHintEl) this.maskHintEl.textContent = this.brushZoom ? this.s.zoomHint : (retouch ? this.s.retouchBrushHint : this.s.brushHint);
     if (this.maskToolLabelEl) this.maskToolLabelEl.textContent = this.s.brushLabel;
     if (!retouch) this.syncMaskTransparentBtn();
+  }
+
+  private stepZoom(factor: number): void {
+    if (!this.isReady) return;
+    const z = this.getState().transform.zoom;
+    const next = clamp(z * factor, 0.2, this.maxZoom);
+    try {
+      this.settle({ zoom: next }, 300);
+    } catch {
+      try {
+        this.applyTransform({ zoom: next });
+      } catch {
+        // Headless/test harness.
+      }
+    }
   }
 
   private updateBrushRing(): void {
@@ -2827,7 +2866,21 @@ export class AurumEditor extends AurumCore {
 
   private setBrushZoom(on: boolean): void {
     this.brushZoom = on;
+    // Auto-zoom on entry so iPhone users see the mode engage; pan/pinch then
+    // work around the zoomed image. At fit-zoom pan alone shows nothing.
+    if (on && this.isReady) {
+      const z = this.getState().transform.zoom;
+      if (z < 1.4) {
+        try {
+          this.settle({ zoom: Math.min(this.maxZoom, z * 1.8) }, 300);
+        } catch {
+          try { this.applyTransform({ zoom: Math.min(this.maxZoom, z * 1.8) }); } catch { // ignore
+          }
+        }
+      }
+    }
     this.syncToolButtons();
+    this.syncBrushChrome();
   }
 
   private showBrush(): void {
