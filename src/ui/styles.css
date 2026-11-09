@@ -1045,6 +1045,8 @@
 .au-text-tap-hint{color:var(--au-muted);font-size:10.5px}
 .au-ai-pane__sub{color:var(--au-muted);font-size:10.5px;margin-top:2px;line-height:1.4}
 .au-ai-pane__list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.au-ai-pane__list--row{flex-direction:row;align-items:stretch}
+.au-ai-pane__list--row .au-param-sep{flex:0 0 auto;align-self:stretch;justify-content:center}
 .au-ai-pane__list--row{flex-direction:row;overflow-x:auto;scroll-snap-type:x proximity;padding:2px 0 4px;scrollbar-width:none;gap:8px}
 .au-ai-pane__list--row::-webkit-scrollbar{display:none}
 .au-ai-pill{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-width:68px;min-height:52px;padding:7px 8px;border-radius:13px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);scroll-snap-align:start;transition:transform .12s ease,border-color .15s ease,background .15s ease}

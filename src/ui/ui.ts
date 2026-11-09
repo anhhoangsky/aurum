@@ -2158,32 +2158,33 @@ export class AurumEditor extends AurumCore {
     mkBtn('person', this.s.bgPersonShort, 'bg');
     mkBtn('blur', this.s.bgBlurShort, 'filter');
     mkBtn('replace', this.s.bgReplaceShort, 'image');
-    if (!this.backgroundAction) {
-      const note = el('div', 'au-ai-pane__note');
-      note.textContent = this.s.bgNeedHost;
-      list.appendChild(note);
-    }
-    pane.appendChild(list);
-    // AI Retouch — Skin Whitening (Phase 1), other modes honest stubs
-    const retouchLabel = el('div', 'au-model-label');
-    retouchLabel.textContent = this.s.retouchTitle;
-    this.retouchLabelEl = retouchLabel;
-    pane.appendChild(retouchLabel);
-    const retouchList = el('div', 'au-ai-pane__list au-ai-pane__list--row');
-    this.retouchListEl = retouchList;
+    // Divider giống Tinh chỉnh: hairline + caption Retouch
+    const sep = el('span', 'au-param-sep');
+    sep.dataset.group = 'retouch';
+    const sepLabel = el('b');
+    sepLabel.textContent = this.s.retouchTitle;
+    sep.appendChild(sepLabel);
+    list.appendChild(sep);
     const mkRetouch = (mode: RetouchMode, label: string, icn: IconName, primary = false) => {
       const row = el('button', `au-ai-pill ${primary ? 'is-primary' : ''}`);
       row.type = 'button';
       row.innerHTML = `${icon(icn)}<span>${escHtml(label)}</span>`;
       row.setAttribute('aria-label', label);
       row.addEventListener('click', () => void this.runRetouch(mode));
-      retouchList.appendChild(row);
+      list.appendChild(row);
     };
     mkRetouch('whiten', this.s.retouchWhiten, 'wand', true);
     mkRetouch('smooth', this.s.retouchSmooth, 'filter');
     mkRetouch('blemish', this.s.retouchBlemish, 'brush');
     mkRetouch('tone', this.s.retouchTone, 'contrast');
-    pane.appendChild(retouchList);
+    this.retouchListEl = list;
+    this.retouchLabelEl = sep;
+    if (!this.backgroundAction) {
+      const note = el('div', 'au-ai-pane__note');
+      note.textContent = this.s.bgNeedHost;
+      list.appendChild(note);
+    }
+    pane.appendChild(list);
 
     // Mask toolbar (visible when refineOn)
     const toolbar = el('div', 'au-mask-tools');
@@ -2390,7 +2391,7 @@ export class AurumEditor extends AurumCore {
     this.refineCanvas.style.display = 'block';
     this.maskToolbar.style.display = 'block';
     // Hide model + action list while refining (dock becomes mask tools only)
-    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl, this.retouchLabelEl, this.retouchListEl]) {
+    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
       if (el) el.style.display = 'none';
     }
     this.positionTexts();
@@ -2425,7 +2426,7 @@ export class AurumEditor extends AurumCore {
     this.refineHistory = [];
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
     if (this.maskToolbar) this.maskToolbar.style.display = 'none';
-    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl, this.retouchLabelEl, this.retouchListEl]) {
+    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
       if (el) el.style.display = '';
     }
     this.positionTexts();
