@@ -2660,7 +2660,9 @@ export class AurumEditor extends AurumCore {
     if (!this.refineOn || !this.refineCanvas) return;
     const stageSize = this.stage.clientWidth || 1;
     const stageH = this.stage.clientHeight || 1;
-    const rect = this.imageDisplayRect() ?? this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
+    // In result mode the stage shows the crop frame only — the overlay must
+    // cover the same frame (not the full image) or it visibly doubles.
+    const rect = this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
     this.refineCanvas.style.left = `${rect.x}px`;
     this.refineCanvas.style.top = `${rect.y}px`;
     this.refineCanvas.style.width = `${rect.width}px`;
@@ -2672,22 +2674,29 @@ export class AurumEditor extends AurumCore {
     const canvas = this.refineCanvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const uv = this.cropUVRect();
+    const cropW = Math.max(1, Math.round((uv.u1 - uv.u0) * this.refineWidth));
+    const cropH = Math.max(1, Math.round((uv.v1 - uv.v0) * this.refineHeight));
     const maxSide = 1080;
-    const k = Math.min(1, maxSide / Math.max(this.refineWidth, this.refineHeight));
-    const w = Math.max(1, Math.round(this.refineWidth * k));
-    const h = Math.max(1, Math.round(this.refineHeight * k));
+    const k = Math.min(1, maxSide / Math.max(cropW, cropH));
+    const w = Math.max(1, Math.round(cropW * k));
+    const h = Math.max(1, Math.round(cropH * k));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     this.positionRefineCanvas();
-    // Brush preview.
-    // Retouch: direct per-pixel mix of the ORIGINAL toward a procedurally
-    //   lightened version by the brushed weight. The AI engine's composite
-    //   only differs from the original on detected skin, so re-weighting it
-    //   showed nothing outside the skin mask; the lift here is computed from
-    //   the original pixels, so the brush whitens wherever the user paints.
-    // Background: bg = checker/white/blur, fg = original cut by alpha mask.
-    const pm = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
+    const sx = Math.round(uv.u0 * this.refineWidth);
+    const sy = Math.round(uv.v0 * this.refineHeight);
+    const sw = Math.max(1, Math.round((uv.u1 - uv.u0) * this.refineWidth));
+    const sh = Math.max(1, Math.round((uv.v1 - uv.v0) * this.refineHeight));
+    // Hold-Original inside brush: show the untouched crop (no brush effect).
+    if (this.peekOn) {
+      ctx.drawImage(this.refineSource, sx, sy, sw, sh, 0, 0, w, h);
+      return;
+    }
+    // Brush preview (crop content only — full image would double against the
+    // framed WebGL photo after a crop).
+    const pm = this.resizeMaskCrop(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, uv, w, h);
     if (this.refineKind === 'retouch') {
-      ctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
+      ctx.drawImage(this.refineSource, sx, sy, sw, sh, 0, 0, w, h);
       const img = ctx.getImageData(0, 0, w, h);
       this.mixRetouchInto(img.data, w, h, pm);
       ctx.putImageData(img, 0, 0);
@@ -2699,12 +2708,12 @@ export class AurumEditor extends AurumCore {
     } else if (this.refineMode === 'blur') {
       // Blurred background preview (downscale trick, same as engine blur)
       const small = document.createElement('canvas');
-      const sw = Math.max(1, w >> 3), sh = Math.max(1, h >> 3);
-      small.width = sw; small.height = sh;
+      const sw2 = Math.max(1, w >> 3), sh2 = Math.max(1, h >> 3);
+      small.width = sw2; small.height = sh2;
       const sctx = small.getContext('2d');
       if (sctx) {
         sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
-        sctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, sw, sh);
+        sctx.drawImage(this.refineSource, sx, sy, sw, sh, 0, 0, sw2, sh2);
         ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(small, 0, 0, w, h);
       }
@@ -2724,7 +2733,7 @@ export class AurumEditor extends AurumCore {
     fg.width = w; fg.height = h;
     const fctx = fg.getContext('2d');
     if (!fctx) return;
-    fctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
+    fctx.drawImage(this.refineSource, sx, sy, sw, sh, 0, 0, w, h);
     const fgImg = fctx.getImageData(0, 0, w, h);
     const fd = fgImg.data;
     for (let i = 0, j = 0; i < pm.length; i++, j += 4) {
@@ -2976,9 +2985,10 @@ export class AurumEditor extends AurumCore {
     this.brushPointer = { x: e.clientX - stageRect.left, y: e.clientY - stageRect.top };
     const fx = clamp01((e.clientX - rect.left) / rect.width);
     const fy = clamp01((e.clientY - rect.top) / rect.height);
-    const cx = fx * this.refineMaskWidth;
-    const cy = fy * this.refineMaskHeight;
-    const radius = this.brushRadiusMask();
+    const uv = this.cropUVRect();
+    const cx = (uv.u0 + fx * (uv.u1 - uv.u0)) * this.refineMaskWidth;
+    const cy = (uv.v0 + fy * (uv.v1 - uv.v0)) * this.refineMaskHeight;
+    const radius = this.brushRadiusMask() / Math.max(0.1, Math.max(uv.u1 - uv.u0, uv.v1 - uv.v0));
     this.brushDabLocal(cx, cy, radius, 0.9);
     this.drawRefinePreview();
     this.updateBrushRing();
@@ -3055,8 +3065,12 @@ export class AurumEditor extends AurumCore {
 
   private async applyRefine(): Promise<void> {
     if (!this.refineOn || !this.refineSource || !this.refineMask) return;
-    const w = this.refineWidth, h = this.refineHeight;
-    const fullMask = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
+    const uv = this.cropUVRect();
+    const sx = Math.round(uv.u0 * this.refineWidth);
+    const sy = Math.round(uv.v0 * this.refineHeight);
+    const w = Math.max(1, Math.round((uv.u1 - uv.u0) * this.refineWidth));
+    const h = Math.max(1, Math.round((uv.v1 - uv.v0) * this.refineHeight));
+    const fullMask = this.resizeMaskCrop(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, uv, w, h);
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d');
@@ -3064,7 +3078,7 @@ export class AurumEditor extends AurumCore {
     if (this.refineKind === 'retouch') {
       // Procedural effect from the original pixels (same formula as preview),
       // gated by the AI mask + brushed weight.
-      ctx.drawImage(this.refineSource, 0, 0, w, h);
+      ctx.drawImage(this.refineSource, sx, sy, w, h, 0, 0, w, h);
       const img = ctx.getImageData(0, 0, w, h);
       this.mixRetouchInto(img.data, w, h, fullMask);
       ctx.putImageData(img, 0, 0);
@@ -3079,7 +3093,7 @@ export class AurumEditor extends AurumCore {
         const sctx = small.getContext('2d');
         if (sctx) {
           sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
-          sctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, small.width, small.height);
+          sctx.drawImage(this.refineSource, sx, sy, w, h, 0, 0, small.width, small.height);
           ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
           ctx.drawImage(small, 0, 0, w, h);
         }
@@ -3089,7 +3103,7 @@ export class AurumEditor extends AurumCore {
       fg.width = w; fg.height = h;
       const fctx = fg.getContext('2d');
       if (!fctx) return;
-      fctx.drawImage(this.refineSource, 0, 0);
+      fctx.drawImage(this.refineSource, sx, sy, w, h, 0, 0, w, h);
       const img = fctx.getImageData(0, 0, w, h);
       const d = img.data;
       for (let i = 0, j = 0; i < fullMask.length; i++, j += 4) {
@@ -4069,9 +4083,16 @@ export class AurumEditor extends AurumCore {
         // Re-sync sliders to the restored (edited) values.
         this.syncUI();
       }
+      if (this.refineOn) this.drawRefinePreview();
       return;
     }
     if (!this.isReady) return;
+    // In brush mode the WebGL canvas is hidden behind the preview — the state
+    // swap alone would be invisible. Redraw the preview as untouched crop.
+    if (this.refineOn) {
+      this.drawRefinePreview();
+      return;
+    }
     // Show the untouched original through the same WebGL shader (identity
     // filter/adjust/enhance) instead of a second canvas — one layer only, so
     // it can never ghost, jitter or sit offset from the edited photo.
@@ -4103,6 +4124,50 @@ export class AurumEditor extends AurumCore {
     const right = Math.max(p00.x, p10.x, p01.x, p11.x);
     const bottom = Math.max(p00.y, p10.y, p01.y, p11.y);
     return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
+  }
+
+  /** Source UV rect visible inside the crop frame (handles crop+zoom/pan). */
+  private cropUVRect(): { u0: number; v0: number; u1: number; v1: number } {
+    const full = { u0: 0, v0: 0, u1: 1, v1: 1 };
+    if (!this.isReady) return full;
+    const frame = this.currentFrame();
+    const stageRect = this.stage.getBoundingClientRect();
+    const corners = [
+      { x: frame.x, y: frame.y },
+      { x: frame.x + frame.width, y: frame.y },
+      { x: frame.x, y: frame.y + frame.height },
+      { x: frame.x + frame.width, y: frame.y + frame.height },
+    ];
+    const uvs = corners.map((c) => this.sourcePointAt(stageRect.left + c.x, stageRect.top + c.y));
+    if (uvs.some((p) => !p)) return full;
+    const us = (uvs as { x: number; y: number }[]).map((p) => p.x);
+    const vs = (uvs as { x: number; y: number }[]).map((p) => p.y);
+    return {
+      u0: Math.min(...us),
+      v0: Math.min(...vs),
+      u1: Math.max(...us),
+      v1: Math.max(...vs),
+    };
+  }
+
+  private resizeMaskCrop(src: Float32Array, sw: number, sh: number, uv: { u0: number; v0: number; u1: number; v1: number }, dw: number, dh: number): Float32Array {
+    const out = new Float32Array(dw * dh);
+    for (let y = 0; y < dh; y++) {
+      const v = uv.v0 + ((y + 0.5) / dh) * (uv.v1 - uv.v0);
+      const fy = v * sh - 0.5;
+      const y0 = Math.max(0, Math.floor(fy)), y1 = Math.min(sh - 1, y0 + 1);
+      const ty = Math.min(1, Math.max(0, fy - y0));
+      for (let x = 0; x < dw; x++) {
+        const u = uv.u0 + ((x + 0.5) / dw) * (uv.u1 - uv.u0);
+        const fx = u * sw - 0.5;
+        const x0 = Math.max(0, Math.floor(fx)), x1 = Math.min(sw - 1, x0 + 1);
+        const tx = Math.min(1, Math.max(0, fx - x0));
+        const top = (src[y0 * sw + x0] ?? 0) * (1 - tx) + (src[y0 * sw + x1] ?? 0) * tx;
+        const bottom = (src[y1 * sw + x0] ?? 0) * (1 - tx) + (src[y1 * sw + x1] ?? 0) * tx;
+        out[y * dw + x] = top * (1 - ty) + bottom * ty;
+      }
+    }
+    return out;
   }
 
   private displayCropRect(): { x: number; y: number; width: number; height: number } | null {
@@ -4420,7 +4485,10 @@ export class AurumEditor extends AurumCore {
     this.on('render', ({ frame }) => {
       this.positionFrame(frame);
       this.positionTexts();
-      this.positionRefineCanvas();
+      // Crop content pans under the fixed frame during zoom — redraw it so
+      // the brush preview never drifts from the WebGL photo.
+      if (this.refineOn && this.currentTab === 'ai') this.drawRefinePreview();
+      else this.positionRefineCanvas();
       if (this.peekOn && this.peekCanvas) {
         const rect = this.imageDisplayRect() ?? this.displayCropRect();
         if (rect) {
