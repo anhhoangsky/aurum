@@ -2892,6 +2892,9 @@ export class AurumEditor extends AurumCore {
       const t = this.getState().transform;
       this.savedTransform = { zoom: t.zoom, offsetX: t.offsetX, offsetY: t.offsetY };
     }
+    // Hide the WebGL photo while brushing so two layers can never ghost or
+    // appear offset at the edges when zoomed — only the brush preview shows.
+    this.canvas.style.visibility = 'hidden';
     this.brushZoom = false;
     this.syncToolButtons();
     this.refineCanvas.style.display = 'block';
@@ -3010,6 +3013,7 @@ export class AurumEditor extends AurumCore {
     this.brushZoom = false;
     this.syncToolButtons();
     this.hideBrushRing();
+    this.canvas.style.visibility = '';
     // Inspection zoom is not an edit — restore the framing from before the brush.
     if (this.savedTransform) {
       const saved = this.savedTransform;
