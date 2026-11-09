@@ -1026,6 +1026,7 @@ export class AurumEditor extends AurumCore {
   private refineMode: BackgroundMode = 'remove';
   private refineBaseMode: BackgroundMode = 'remove';
   private refineModelId = '';
+  private savedTransform: { zoom: number; offsetX: number; offsetY: number } | null = null;
   private refineKind: 'bg' | 'retouch' = 'bg';
   private retouchEffect: RetouchMode = 'whiten';
   private refineWhitened: CanvasImageSource | null = null;
@@ -2398,7 +2399,7 @@ export class AurumEditor extends AurumCore {
     this.maskHintEl = hint;
     this.maskBrushTicks = this.makeTicks({
       label: this.s.brushSizeMask,
-      min: 1, max: 30, step: 1, tickStep: 2, defaultValue: this.brushSize,
+      min: 1, max: 50, step: 1, tickStep: 1, defaultValue: this.brushSize,
       format: (v) => `${Math.round(v)}px`,
       onInput: (v) => { this.brushSize = Math.round(v); this.updateBrushRing(); },
     });
@@ -2885,6 +2886,12 @@ export class AurumEditor extends AurumCore {
 
   private showBrush(): void {
     this.ensureRefineCanvas();
+    // Zoom/pan during brush is inspection only — remember the framing so it
+    // can be restored when the brush closes (never part of the edit itself).
+    if (!this.savedTransform && this.isReady) {
+      const t = this.getState().transform;
+      this.savedTransform = { zoom: t.zoom, offsetX: t.offsetX, offsetY: t.offsetY };
+    }
     this.brushZoom = false;
     this.syncToolButtons();
     this.refineCanvas.style.display = 'block';
@@ -3003,6 +3010,17 @@ export class AurumEditor extends AurumCore {
     this.brushZoom = false;
     this.syncToolButtons();
     this.hideBrushRing();
+    // Inspection zoom is not an edit — restore the framing from before the brush.
+    if (this.savedTransform) {
+      const saved = this.savedTransform;
+      this.savedTransform = null;
+      try {
+        this.settle(saved, 250);
+      } catch {
+        try { this.applyTransform(saved); } catch { // ignore
+        }
+      }
+    }
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
     if (this.maskToolbar) this.maskToolbar.style.display = 'none';
     for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
