@@ -927,6 +927,9 @@ export class AurumEditor extends AurumCore {
   private filterSaveBtn!: HTMLButtonElement;
   private savedList!: HTMLElement;
   private userPresets: UserPreset[] = loadUserPresets();
+  private savedFilterButtons = new Map<string, HTMLButtonElement>();
+  private activeSavedId: string | null = null;
+  private savedReturnState: EditorState | null = null;
   // Filter tune (custom sliders per tone)
   private filterTuneKey: keyof Adjustments = 'brightness';
   private filterTuneTicks!: TickControl;
@@ -3004,6 +3007,25 @@ export class AurumEditor extends AurumCore {
 
   private applyUserPreset(p: UserPreset): void {
     if (!this.isReady) return;
+    // Toggle: tap an active saved preset again to turn it off (restore state
+    // from before it was applied), so the thumbnail acts as an on/off switch.
+    if (this.activeSavedId === p.id) {
+      const restore = this.savedReturnState;
+      this.activeSavedId = null;
+      this.savedReturnState = null;
+      if (restore) {
+        this.setState(restore);
+      } else {
+        this.setFilter('original');
+      }
+      this.syncUI();
+      this.buildFilters();
+      this.toast(this.s.resetFilter);
+      return;
+    }
+    // First apply: remember where we were so the next tap can toggle back.
+    this.savedReturnState = this.getState();
+    this.activeSavedId = p.id;
     const current = this.getState();
     const next: EditorState = {
       ...current,
@@ -3013,6 +3035,7 @@ export class AurumEditor extends AurumCore {
     };
     this.setState(next);
     this.syncUI();
+    this.buildFilters();
     this.toast(this.s.presetApplied);
   }
 
@@ -4152,6 +4175,7 @@ export class AurumEditor extends AurumCore {
     const current = this.getState().filter;
     this.filterWrap.replaceChildren();
     this.filterButtons.clear();
+    this.savedFilterButtons.clear();
     // Saved presets first (like a personal row), separated from defaults by label
     if (this.userPresets.length) {
       for (const p of this.userPresets) {
@@ -4162,18 +4186,25 @@ export class AurumEditor extends AurumCore {
         const label = el('span');
         label.textContent = p.name;
         button.append(canvas, label);
-        const isActiveSaved = current === (p.filter || 'original');
-        button.setAttribute('aria-pressed', String(isActiveSaved && this.getState().filter === p.filter));
+        button.setAttribute('aria-pressed', String(this.activeSavedId === p.id));
         button.setAttribute('aria-label', `${p.name}`);
         button.title = `${p.name}`;
-        button.addEventListener('click', () => this.applyUserPreset(p));
-        button.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
+        this.savedFilterButtons.set(p.id, button);
+        const deleteSaved = () => {
           this.userPresets = this.userPresets.filter((x) => x.id !== p.id);
+          if (this.activeSavedId === p.id) {
+            this.activeSavedId = null;
+            this.savedReturnState = null;
+          }
           storeUserPresets(this.userPresets);
           this.renderSavedPresets();
           this.buildFilters();
           this.toast(this.s.presetDeleted);
+        };
+        button.addEventListener('click', () => this.applyUserPreset(p));
+        button.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          deleteSaved();
         });
         // small trash dot inside
         const trash = el('span', 'au-filter--saved-del');
@@ -4181,11 +4212,7 @@ export class AurumEditor extends AurumCore {
         trash.setAttribute('aria-hidden', 'true');
         trash.addEventListener('click', (e) => {
           e.stopPropagation();
-          this.userPresets = this.userPresets.filter((x) => x.id !== p.id);
-          storeUserPresets(this.userPresets);
-          this.renderSavedPresets();
-          this.buildFilters();
-          this.toast(this.s.presetDeleted);
+          deleteSaved();
         });
         button.appendChild(trash);
         this.filterWrap.appendChild(button);
@@ -4210,7 +4237,21 @@ export class AurumEditor extends AurumCore {
       button.setAttribute('aria-pressed', String(current === preset.id));
       button.setAttribute('aria-label', presetName);
       button.addEventListener('click', () => {
-        this.setFilter(preset.id);
+        // Toggle: tap the active tone again to turn it off (back to Nguyên bản).
+        // Saved presets clear the same way via applyUserPreset(). Original
+        // itself never toggles (it IS the off state).
+        if (current === preset.id && preset.id !== 'original') {
+          this.activeSavedId = null;
+          this.savedReturnState = null;
+          this.setFilter('original');
+          this.syncUI();
+          this.buildFilters();
+          this.toast(this.s.resetFilter);
+        } else {
+          this.activeSavedId = null;
+          this.savedReturnState = null;
+          this.setFilter(preset.id);
+        }
         // Give the tone hint a moment to read: specific labels, no jargon.
         const choice = PRESETS.find((p) => p.id === preset.id);
         if (this.filterHint && choice?.hint) {
@@ -4261,6 +4302,10 @@ export class AurumEditor extends AurumCore {
 
     for (const [id, button] of this.filterButtons) {
       button.setAttribute('aria-pressed', String(state.filter === id));
+    }
+    for (const [id, button] of this.savedFilterButtons) {
+      button.setAttribute('aria-pressed', String(this.activeSavedId === id));
+      button.classList.toggle('is-active', this.activeSavedId === id);
     }
     this.syncTuneUI();
     this.positionTexts();

@@ -1024,6 +1024,11 @@
 .au-mask-btn{display:flex;align-items:center;justify-content:center;gap:6px;height:34px;border-radius:9px;color:var(--au-muted);font-size:11px;font-weight:700}
 .au-mask-btn svg{width:14px;height:14px;flex:0 0 14px}
 .au-mask-btn[aria-pressed="true"]{background:var(--au-gold-soft);color:var(--au-gold)}
+.au-mask-tools .au-chip{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;vertical-align:middle}
+.au-mask-tools .au-chip svg{width:14px;height:14px;flex:0 0 auto;display:block}
+.au-mask-tools .au-chip span{line-height:1;white-space:nowrap}
+.au-filter.is-active{color:var(--au-gold)}
+.au-filter--saved.is-active canvas{border-color:var(--au-gold)!important;box-shadow:0 0 0 1px rgba(243,199,123,.5),0 8px 22px rgba(226,173,82,.22)!important}
 .au-mask-hint{color:var(--au-muted);font-size:10px;line-height:1.4;margin:6px 0}
 .au-mask-actions{display:grid;grid-template-columns:1fr 1.4fr;gap:6px;margin-top:6px}
 .au-mask-apply{height:38px;border-radius:11px;font-size:12px}
