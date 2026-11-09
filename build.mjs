@@ -62,6 +62,16 @@ await Promise.all([
   }),
   build({
     ...shared,
+    entryPoints: ['src/ai-retouch/index.ts'],
+    banner: {
+      js: `/*! ${pkg.name} AI Retouch v${pkg.version} | independent skin retouch subsystem | offline-first, loads ORT at runtime */`,
+    },
+    format: 'esm',
+    minify: true,
+    outfile: 'dist/aurum-ai-retouch.esm.js',
+  }),
+  build({
+    ...shared,
     entryPoints: ['src/beauty/index.ts'],
     banner: {
       js: `/*! ${pkg.name} Beauty v${pkg.version} | optional CPU skin/feature mask | ${pkg.license} */`,
@@ -132,6 +142,7 @@ const files = [
   'dist/aurum.min.js',
   'dist/aurum-ai.esm.js',
   'dist/aurum-ai-engine.esm.js',
+  'dist/aurum-ai-retouch.esm.js',
   'dist/aurum-beauty.esm.js',
   'dist/aurum-landmarks.esm.js',
   'dist/aurum.css',

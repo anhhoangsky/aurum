@@ -27,6 +27,11 @@
       "import": "./dist/aurum-landmarks.esm.js",
       "default": "./dist/aurum-landmarks.esm.js"
     },
+    "./ai-retouch": {
+      "types": "./dist/types/ai-retouch/index.d.ts",
+      "import": "./dist/aurum-ai-retouch.esm.js",
+      "default": "./dist/aurum-ai-retouch.esm.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

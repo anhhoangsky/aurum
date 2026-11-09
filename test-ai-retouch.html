@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Aurum AI Retouch — Test (Whitening Phase 1)</title>
+<style>
+  body{margin:0;background:#08080a;color:#f4f2ec;font:13px/1.5 system-ui,sans-serif;padding:16px}
+  h1{font-size:16px} .card{background:#141418;border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:14px;margin:12px 0}
+  button{background:#f3c77b;color:#2a1c06;border:0;border-radius:999px;padding:10px 16px;font-weight:750}
+  button.secondary{background:rgba(255,255,255,.08);color:#e8e4db;border:1px solid rgba(255,255,255,.15)}
+  pre{background:#0a0a0d;border-radius:10px;padding:10px;overflow:auto;max-height:300px}
+  img{max-width:100%;height:auto;border-radius:8px}
+</style>
+</head>
+<body>
+<h1>Aurum AI Retouch — Skin Whitening (Phase 1)</h1>
+<div class="card">
+  <p>Engine: BlazeFace ONNX (0.5 MB) + skin mask + Retinex L boost trên da. Offline sau khi cài 1 lần. Bundle: <code>aurum-ai-retouch.esm.js</code></p>
+  <button id="probe">Probe backend</button>
+  <button id="install" class="secondary">Tải Blazeface (SHA-256 verify)</button>
+  <button id="run">Whiten skin (strength 0.5)</button>
+  <button id="abort" class="secondary">Huỷ</button>
+  <pre id="log">Sẵn sàng.</pre>
+</div>
+<div class="card"><h3>Before</h3><img id="before" alt="before"><h3>After (ImageData)</h3><canvas id="after"></canvas></div>
+<script type="module">
+import { create } from './assets/aurum-ai-retouch.esm.js';
+const RUNTIME = {
+  webgpu: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.webgpu.min.mjs',
+  wasm: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.mjs',
+};
+const $ = (s) => document.querySelector(s);
+const log = (m) => { const el = $('#log'); el.textContent += '\n' + m; el.scrollTop = el.scrollHeight; };
+let engine = null;
+let source = null;
+let aborter = null;
+async function ensureEngine() {
+  if (!engine) {
+    log('Tạo engine…');
+    engine = await create({ offline: true, runtime: RUNTIME, onStatus: (m) => log(m) });
+    log(`backend=${engine.backend}`);
+  }
+  return engine;
+}
+async function loadImg() {
+  const blob = await (await fetch('./test-assets/portrait.jpg')).blob();
+  source = await createImageBitmap(blob, { imageOrientation: 'from-image' }).catch(async () => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image(); img.src = url; await img.decode(); return img;
+  });
+  const before = $('#before');
+  const c = document.createElement('canvas');
+  c.width = source.width; c.height = source.height;
+  c.getContext('2d').drawImage(source, 0, 0);
+  before.src = c.toDataURL();
+  log(`Ảnh ${source.width}×${source.height}`);
+}
+$('#probe').onclick = async () => {
+  try {
+    await ensureEngine();
+    const installed = await engine.getInstalledModels();
+    log(`Installed: ${JSON.stringify(installed)}`);
+    await loadImg();
+  } catch (e) { log('ERR probe: ' + e.message); }
+};
+$('#install').onclick = async () => {
+  try {
+    await ensureEngine();
+    log('Đang cài blazeface-onnx…');
+    const m = await engine.installModel('blazeface-onnx', '', undefined);
+    log(`Đã cài ${m.id} ${m.bytes} bytes sha=${m.sha256.slice(0,16)}… OK`);
+  } catch (e) { log('ERR install: ' + e.message); }
+};
+$('#run').onclick = async () => {
+  try {
+    await ensureEngine();
+    if (!source) await loadImg();
+    aborter = new AbortController();
+    log('Đang whiten…');
+    const res = await engine.whitenSkin(source, { strength: 0.5, signal: aborter.signal, onProgress: (s) => log('  ' + s) });
+    if (!res.success) { log(`Whiten failed (${res.error?.code}): ${res.error?.message}`); return; }
+    const c = $('#after'); c.width = res.composite.width; c.height = res.composite.height;
+    c.getContext('2d').putImageData(res.composite, 0, 0);
+    log(`Xong: ${res.metadata.inferenceTime.toFixed(0)} ms, faces=${res.metadata.faceCount}, backend=${res.metadata.backend}`);
+  } catch (e) { log('ERR run: ' + e.message); }
+};
+$('#abort').onclick = () => aborter?.abort();
+</script>
+</body>
+</html>
