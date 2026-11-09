@@ -3100,8 +3100,17 @@ export class AurumEditor extends AurumCore {
       return;
     }
     const wasRetouch = this.refineKind === 'retouch';
+    // `load()` resets state to defaults — preserve the colour stack so the
+    // filter/adjust the user applied before the brush stays on top of the
+    // baked result (framing stays fitted to the new bitmap).
+    const keep = this.getState();
     this.cancelRefine();
     await this.load(blob);
+    try {
+      this.setState({ ...keep, transform: this.getState().transform, crop: this.getState().crop }, { history: true });
+    } catch {
+      // Keep the freshly fitted framing if the merge fails.
+    }
     this.showTab('adjust');
     this.toast(wasRetouch ? this.s.retouchDone : this.s.bgDone);
   }
