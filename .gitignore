@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.log
+# Local model artifacts (downloaded on demand, verified by SHA-256) — never commit
+models/*
+!models/README.md
