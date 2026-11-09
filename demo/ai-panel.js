@@ -102,25 +102,29 @@ function render() {
 }
 
 async function bitmapFrom(source) {
-  if (typeof source !== 'string') return source;
-  const blob = await (await fetch(source)).blob();
-  try {
-    return await createImageBitmap(blob);
-  } catch {
-    // iOS Safari / format edge cases: fall back to <img>, fully decoded.
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.src = url;
-    if (img.decode) {
-      await img.decode();
-    } else {
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-      });
-    }
-    return img;
+  if (typeof source === 'string') {
+    source = await (await fetch(source)).blob();
   }
+  if (typeof Blob !== 'undefined' && source instanceof Blob) {
+    try {
+      return await createImageBitmap(source);
+    } catch {
+      // iOS Safari / format edge cases: fall back to <img>, fully decoded.
+      const url = URL.createObjectURL(source);
+      const img = new Image();
+      img.src = url;
+      if (img.decode) {
+        await img.decode();
+      } else {
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+      }
+      return img;
+    }
+  }
+  return source;
 }
 
 function sizeOf(bitmap) {
