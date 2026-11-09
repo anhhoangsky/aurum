@@ -85,7 +85,7 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     sizeBytes: 88_116_798,
     // Verified locally 2026-11-09: matches the HF LFS oid.
     sha256: 'dffe20331551dcc5d7601563e472448424821f2df41f5bad395848826c5b5be5',
-    license: 'Apache-2.0 (onnx-community/ISNet-ONNX; upstream ISNet general use) — verify per-artifact',
+    license: 'AGPL-3.0 (onnx-community/ISNet-ONNX model card) — copyleft; review before redistribution',
     supportedBackends: ['webgpu', 'wasm'],
     inputResolutions: [1024],
     quantization: 'fp16',

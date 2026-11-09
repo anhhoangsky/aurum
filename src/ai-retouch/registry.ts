@@ -31,7 +31,7 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     source: 'https://huggingface.co/garavv/blazeface-onnx/resolve/main/blaze.onnx',
     sizeBytes: 535_842,
     sha256: '564740c5146673c840257402cee8309161848e48e64d277a862ab4d501adf8a5',
-    license: 'Apache-2.0 (MediaPipe, Google) — verify per-artifact',
+    license: 'unknown (garavv/blazeface-onnx card has no license metadata; upstream MediaPipe BlazeFace is Apache-2.0) — verify before redistribution',
     supportedBackends: ['webgpu', 'wasm'],
     inputResolutions: [128],
     quantization: 'fp32',
