@@ -2342,30 +2342,23 @@ export class AurumEditor extends AurumCore {
       }
     }
     // downscaled mask for preview
+    // Composite: bg already drawn on ctx (checker/white/blur, fully opaque),
+    // overlay fg with alpha mask. The opaque bg covers the stage's original
+    // photo underneath, so transparency (mask=0) shows checker — not the
+    // original image bleeding through.
     const pm = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
-    if (this.refineMode === 'replace' || this.refineMode === 'blur') {
-      // Composite: bg already drawn, overlay fg with alpha mask
-      const fg = document.createElement('canvas');
-      fg.width = w; fg.height = h;
-      const fctx = fg.getContext('2d');
-      if (!fctx) return;
-      fctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
-      const fgImg = fctx.getImageData(0, 0, w, h);
-      const fd = fgImg.data;
-      for (let i = 0, j = 0; i < pm.length; i++, j += 4) {
-        fd[j + 3] = Math.round(Math.min(1, Math.max(0, pm[i] ?? 0)) * 255);
-      }
-      fctx.putImageData(fgImg, 0, 0);
-      ctx.drawImage(fg, 0, 0);
-      return;
-    }
-    ctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
-    const img = ctx.getImageData(0, 0, w, h);
-    const d = img.data;
+    const fg = document.createElement('canvas');
+    fg.width = w; fg.height = h;
+    const fctx = fg.getContext('2d');
+    if (!fctx) return;
+    fctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
+    const fgImg = fctx.getImageData(0, 0, w, h);
+    const fd = fgImg.data;
     for (let i = 0, j = 0; i < pm.length; i++, j += 4) {
-      d[j + 3] = Math.round(Math.min(1, Math.max(0, pm[i] ?? 0)) * 255);
+      fd[j + 3] = Math.round(Math.min(1, Math.max(0, pm[i] ?? 0)) * 255);
     }
-    ctx.putImageData(img, 0, 0);
+    fctx.putImageData(fgImg, 0, 0);
+    ctx.drawImage(fg, 0, 0);
     // brush ring hint is native cursor; keep pointer-events auto
   }
 
