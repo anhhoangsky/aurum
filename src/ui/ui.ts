@@ -195,6 +195,10 @@ const STRINGS = {
     bgBlur: 'Mờ phông',
     bgReplace: 'Đổi nền trắng',
     bgPerson: 'Tách người (MODNet)',
+    bgRemoveShort: 'Xoá phông',
+    bgBlurShort: 'Mờ phông',
+    bgReplaceShort: 'Nền trắng',
+    bgPersonShort: 'Tách người',
     bgNeedHost: 'Bản dựng này chưa bật AI tách nền. Mở demo/ai-panel.html để thử engine offline-first.',
     bgRunning: 'Đang tách nền…',
     bgDone: 'Đã tách nền — cảnh báo: lịch sử chỉnh sửa được đặt lại.',
@@ -412,6 +416,10 @@ const STRINGS = {
     bgBlur: 'Blur background',
     bgReplace: 'White background',
     bgPerson: 'Person matte (MODNet)',
+    bgRemoveShort: 'Remove',
+    bgBlurShort: 'Blur',
+    bgReplaceShort: 'White bg',
+    bgPersonShort: 'Person',
     bgNeedHost: 'This build has no AI background action. Open demo/ai-panel.html to try the offline engine.',
     bgRunning: 'Removing background…',
     bgDone: 'Background removed — note: edit history is reset.',
@@ -2041,19 +2049,7 @@ export class AurumEditor extends AurumCore {
 
   // ------------------------------------------------------------------- AI pane
   private buildAIPane(pane: HTMLElement): void {
-    const title = el('div', 'au-ai-pane');
-    const h = el('div', 'au-ai-pane__head');
-    const headIcon = el('span', 'au-ai-pane__icon');
-    headIcon.innerHTML = icon('wand');
-    const headText = el('div', 'au-ai-pane__texts');
-    const titleEl = el('div', 'au-ai-pane__title');
-    titleEl.textContent = this.s.bgTitle;
-    const sub = el('div', 'au-ai-pane__sub');
-    sub.textContent = this.s.bgSub;
-    headText.append(titleEl, sub);
-    h.append(headIcon, headText);
-    title.appendChild(h);
-    pane.appendChild(title);
+    // Gọn: bỏ header description, vào thẳng chọn model + thao tác (Apple Simplicity)
 
     // Model picker — ISNet default (user choice: quality)
     const modelLabel = el('div', 'au-model-label');
@@ -2099,18 +2095,19 @@ export class AurumEditor extends AurumCore {
     this.bgModelDetail.textContent = `${this.s[initD.label]} · ${this.s[initD.detail]}`;
     pane.appendChild(this.bgModelDetail);
 
-    const list = el('div', 'au-ai-pane__list');
-    const mkBtn = (mode: BackgroundMode, label: string, hint: string, primary = false) => {
-      const row = el('button', `au-ai-row ${primary ? 'is-primary' : ''}`);
+    const list = el('div', 'au-ai-pane__list au-ai-pane__list--row');
+    const mkBtn = (mode: BackgroundMode, label: string, icn: IconName, primary = false) => {
+      const row = el('button', `au-ai-pill ${primary ? 'is-primary' : ''}`);
       row.type = 'button';
-      row.innerHTML = `<b>${escHtml(label)}</b><span>${escHtml(hint)}</span>`;
+      row.innerHTML = `${icon(icn)}<span>${escHtml(label)}</span>`;
+      row.setAttribute('aria-label', label);
       row.addEventListener('click', () => void this.runBackground(mode));
       list.appendChild(row);
     };
-    mkBtn('remove', this.s.bgRemove, 'PNG trong suốt · Cọ tay chỉnh viền', true);
-    mkBtn('person', this.s.bgPerson, 'MODNet 13 MB · Người · Cọ tay');
-    mkBtn('blur', this.s.bgBlur, 'Mờ nền, giữ chủ thể');
-    mkBtn('replace', this.s.bgReplace, 'Nền trắng sạch');
+    mkBtn('remove', this.s.bgRemoveShort, 'eraser', true);
+    mkBtn('person', this.s.bgPersonShort, 'bg');
+    mkBtn('blur', this.s.bgBlurShort, 'contrast');
+    mkBtn('replace', this.s.bgReplaceShort, 'image');
     if (!this.backgroundAction) {
       const note = el('div', 'au-ai-pane__note');
       note.textContent = this.s.bgNeedHost;
