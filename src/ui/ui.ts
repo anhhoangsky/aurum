@@ -999,6 +999,8 @@ export class AurumEditor extends AurumCore {
   private whitenStrength = 0.6;
   private brushMode: 'add' | 'erase' = 'add';
   private brushSize = 7;
+  private brushRingEl: HTMLElement | null = null;
+  private brushPointer: { x: number; y: number } | null = null;
   private refineHistory: Float32Array[] = [];
   private refineStroke: { pointerId: number; snapshotTaken: boolean } | null = null;
   private maskToolbar!: HTMLElement;
@@ -2310,7 +2312,7 @@ export class AurumEditor extends AurumCore {
       label: this.s.brushSizeMask,
       min: 1, max: 30, step: 1, tickStep: 2, defaultValue: this.brushSize,
       format: (v) => `${Math.round(v)}px`,
-      onInput: (v) => { this.brushSize = Math.round(v); },
+      onInput: (v) => { this.brushSize = Math.round(v); this.updateBrushRing(); },
     });
     this.whitenStrengthTicks = this.makeTicks({
       label: this.s.retouchStrength,
@@ -2484,11 +2486,40 @@ export class AurumEditor extends AurumCore {
     if (!retouch) this.syncMaskTransparentBtn();
   }
 
+  private updateBrushRing(): void {
+    if (!this.brushRingEl) return;
+    if (!this.refineOn || !this.brushPointer || !this.refineCanvas) {
+      this.brushRingEl.style.display = 'none';
+      return;
+    }
+    const rect = this.refineCanvas.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return;
+    const scaleX = rect.width / Math.max(1, this.refineMaskWidth);
+    const scaleY = rect.height / Math.max(1, this.refineMaskHeight);
+    const radiusMask = Math.max(4, (this.brushSize / 100) * Math.min(this.refineMaskWidth, this.refineMaskHeight) * 2);
+    const r = Math.max(8, radiusMask * Math.min(scaleX, scaleY));
+    const d = r * 2;
+    const x = this.brushPointer.x, y = this.brushPointer.y;
+    this.brushRingEl.style.width = `${d}px`;
+    this.brushRingEl.style.height = `${d}px`;
+    this.brushRingEl.style.transform = `translate(-50%,-50%) translate(${x}px,${y}px)`;
+    this.brushRingEl.style.display = 'block';
+  }
+
+  private hideBrushRing(): void {
+    this.brushPointer = null;
+    if (this.brushRingEl) this.brushRingEl.style.display = 'none';
+  }
+
   private ensureRefineCanvas(): void {
     if (this.refineCanvas) return;
     const c = document.createElement('canvas');
     c.className = 'au-maskprev';
     c.setAttribute('aria-hidden', 'true');
+    const ring = el('div', 'au-brush-ring au-mask-ring');
+    ring.setAttribute('aria-hidden', 'true');
+    this.stage.appendChild(ring);
+    this.brushRingEl = ring;
     // pointer handlers for brush (Apple: 1:1, offset preserved, capture)
     const onDown = (e: PointerEvent) => {
       if (!this.refineOn) return;
@@ -2500,15 +2531,26 @@ export class AurumEditor extends AurumCore {
       this.brushAt(e);
     };
     const onMove = (e: PointerEvent) => {
+      // Hover ring for mouse (size preview before painting); touch paints.
+      if (e.pointerType === 'mouse' && !this.refineStroke) {
+        const stageRect = this.stage.getBoundingClientRect();
+        this.brushPointer = { x: e.clientX - stageRect.left, y: e.clientY - stageRect.top };
+        this.updateBrushRing();
+        return;
+      }
       if (!this.refineStroke || this.refineStroke.pointerId !== e.pointerId) return;
       e.preventDefault();
       this.brushAt(e);
     };
-    const onUp = () => { this.refineStroke = null; this.drawRefinePreview(); };
+    const onUp = () => { this.refineStroke = null; this.drawRefinePreview(); this.hideBrushRing(); };
     c.addEventListener('pointerdown', onDown);
     c.addEventListener('pointermove', onMove);
     c.addEventListener('pointerup', onUp);
     c.addEventListener('pointercancel', onUp);
+    c.addEventListener('pointerleave', () => {
+      if (this.refineStroke) return;
+      this.hideBrushRing();
+    });
     this.stage.appendChild(c);
     this.refineCanvas = c;
   }
@@ -2566,6 +2608,8 @@ export class AurumEditor extends AurumCore {
     if (!this.refineCanvas || !this.refineMask) return;
     const rect = this.refineCanvas.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return;
+    const stageRect = this.stage.getBoundingClientRect();
+    this.brushPointer = { x: e.clientX - stageRect.left, y: e.clientY - stageRect.top };
     const fx = clamp01((e.clientX - rect.left) / rect.width);
     const fy = clamp01((e.clientY - rect.top) / rect.height);
     const cx = fx * this.refineMaskWidth;
@@ -2574,6 +2618,7 @@ export class AurumEditor extends AurumCore {
     const radius = Math.max(4, (this.brushSize / 100) * Math.min(this.refineMaskWidth, this.refineMaskHeight) * 2);
     this.brushDabLocal(cx, cy, radius, 0.9);
     this.drawRefinePreview();
+    this.updateBrushRing();
   }
 
   private refineUndo(): void {
@@ -2622,6 +2667,7 @@ export class AurumEditor extends AurumCore {
     this.refineWhitened = null;
     this.refineMask = null;
     this.refineHistory = [];
+    this.hideBrushRing();
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
     if (this.maskToolbar) this.maskToolbar.style.display = 'none';
     for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
