@@ -487,6 +487,34 @@ async function runRetouch(editor, context, mode) {
   c.width = result.composite.width;
   c.height = result.composite.height;
   c.getContext('2d').putImageData(result.composite, 0, 0);
+  // Return skin mask + whitened image so UI enters brush mode (Giữ/Xoá adjust
+  // the whitening weight) instead of loading immediately.
+  if (result.skinMask && result.skinMask.data?.length && result.skinMask.width > 0) {
+    const MAX = 1600;
+    const k = Math.min(1, MAX / Math.max(result.skinMask.width, result.skinMask.height));
+    const mw = Math.max(1, Math.round(result.skinMask.width * k));
+    const mh = Math.max(1, Math.round(result.skinMask.height * k));
+    let data = result.skinMask.data;
+    if (mw !== result.skinMask.width || mh !== result.skinMask.height) {
+      const out = new Float32Array(mw * mh);
+      const sx = result.skinMask.width / mw, sy = result.skinMask.height / mh;
+      for (let y = 0; y < mh; y++) {
+        const fy = (y + 0.5) * sy - 0.5;
+        const y0 = Math.max(0, Math.floor(fy)), y1 = Math.min(result.skinMask.height - 1, y0 + 1);
+        const ty = Math.min(1, Math.max(0, fy - y0));
+        for (let x = 0; x < mw; x++) {
+          const fx = (x + 0.5) * sx - 0.5;
+          const x0 = Math.max(0, Math.floor(fx)), x1 = Math.min(result.skinMask.width - 1, x0 + 1);
+          const tx = Math.min(1, Math.max(0, fx - x0));
+          const top = (data[y0 * result.skinMask.width + x0] ?? 0) * (1 - tx) + (data[y0 * result.skinMask.width + x1] ?? 0) * tx;
+          const bottom = (data[y1 * result.skinMask.width + x0] ?? 0) * (1 - tx) + (data[y1 * result.skinMask.width + x1] ?? 0) * tx;
+          out[y * mw + x] = top * (1 - ty) + bottom * ty;
+        }
+      }
+      data = out;
+    }
+    return { maskWidth: mw, maskHeight: mh, mask: data, whitened: c, whitenWidth: c.width, whitenHeight: c.height };
+  }
   const blob = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('PNG encoding failed'))), 'image/png'));
   await editor.load(blob);
   editor.showTab('adjust');

@@ -253,6 +253,8 @@ const STRINGS = {
     retouchTone: 'Tông da',
     retouchDone: 'Đã retouch AI',
     retouchFailed: 'Chưa retouch được',
+    retouchBrushHint: 'Cọ để tăng/giảm độ trắng: Giữ = trắng thêm, Xoá = hoàn tác trắng.',
+    retouchBrushReady: 'AI xong — cọ chỉnh trắng da rồi Hoàn tất',
   },
   en: {
     title: 'Edit photo',
@@ -485,6 +487,8 @@ const STRINGS = {
     retouchTone: 'Tone',
     retouchDone: 'AI retouch done',
     retouchFailed: 'Could not retouch',
+    retouchBrushHint: 'Brush to add/remove whitening: Keep = whiten more, Erase = undo whitening.',
+    retouchBrushReady: 'AI done — brush the whitening, then Done',
   },
 } as const;
 
@@ -520,8 +524,17 @@ export interface RetouchActionContext {
   report: (progress: number, label?: string) => void;
 }
 
+export interface RetouchBrushResult {
+  maskWidth: number;
+  maskHeight: number;
+  mask: Float32Array;
+  whitened: CanvasImageSource;
+  whitenWidth: number;
+  whitenHeight: number;
+}
+
 export interface RetouchAction {
-  run: (editor: AurumEditor, context: RetouchActionContext, mode: RetouchMode) => Promise<void>;
+  run: (editor: AurumEditor, context: RetouchActionContext, mode: RetouchMode) => Promise<RetouchBrushResult | void>;
 }
 
 export interface BackgroundActionContext {
@@ -972,6 +985,10 @@ export class AurumEditor extends AurumCore {
   private refineMode: BackgroundMode = 'remove';
   private refineBaseMode: BackgroundMode = 'remove';
   private refineModelId = '';
+  private refineKind: 'bg' | 'retouch' = 'bg';
+  private refineWhitened: CanvasImageSource | null = null;
+  private refineWhitenedW = 0;
+  private refineWhitenedH = 0;
   private brushMode: 'add' | 'erase' = 'add';
   private brushSize = 7;
   private refineHistory: Float32Array[] = [];
@@ -979,6 +996,9 @@ export class AurumEditor extends AurumCore {
   private maskToolbar!: HTMLElement;
   private maskBrushTicks!: TickControl;
   private maskTransparentBtn: HTMLButtonElement | null = null;
+  private maskInvertBtn: HTMLButtonElement | null = null;
+  private maskHintEl: HTMLElement | null = null;
+  private maskToolLabelEl: HTMLElement | null = null;
   private textLayer!: HTMLElement;
   private texts: AurumTextLayer[] = [];
   private selectedTextId: string | null = null;
@@ -2188,11 +2208,12 @@ export class AurumEditor extends AurumCore {
     }
     pane.appendChild(list);
 
-    // Mask toolbar (visible when refineOn)
+    // Mask toolbar (visible when refineOn) — shared by background + retouch brush
     const toolbar = el('div', 'au-mask-tools');
     toolbar.style.display = 'none';
     const toolLabel = el('div', 'au-mask-tools__label');
     toolLabel.textContent = this.s.brushLabel;
+    this.maskToolLabelEl = toolLabel;
     const modeSeg = el('div', 'au-seg au-mask-seg');
     modeSeg.setAttribute('role', 'group');
     const addBtn = el('button', 'au-mask-btn');
@@ -2233,9 +2254,11 @@ export class AurumEditor extends AurumCore {
     transparentBtn.title = this.s.brushTransparent;
     transparentBtn.addEventListener('click', () => this.refineToggleTransparent());
     this.maskTransparentBtn = transparentBtn;
+    this.maskInvertBtn = invertBtn;
     quickRow.append(undoBtn, invertBtn, transparentBtn);
     const hint = el('div', 'au-mask-hint');
     hint.textContent = this.s.brushHint;
+    this.maskHintEl = hint;
     this.maskBrushTicks = this.makeTicks({
       label: this.s.brushSizeMask,
       min: 1, max: 30, step: 1, tickStep: 2, defaultValue: this.brushSize,
@@ -2316,8 +2339,13 @@ export class AurumEditor extends AurumCore {
     canvas.style.top = `${rect.y}px`;
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
-    // checker background (8px cells) — for blur/replace preview uses actual bg
-    if (this.refineMode === 'replace') {
+    // Brush preview.
+    // Retouch: bg = original (opaque), fg = AI-whitened blended by mask weight
+    //   (brush adds/removes whitening). Background: bg = checker/white/blur,
+    //   fg = original cut by alpha mask.
+    if (this.refineKind === 'retouch') {
+      ctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
+    } else if (this.refineMode === 'replace') {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, w, h);
     } else if (this.refineMode === 'blur') {
@@ -2342,16 +2370,18 @@ export class AurumEditor extends AurumCore {
       }
     }
     // downscaled mask for preview
-    // Composite: bg already drawn on ctx (checker/white/blur, fully opaque),
-    // overlay fg with alpha mask. The opaque bg covers the stage's original
-    // photo underneath, so transparency (mask=0) shows checker — not the
-    // original image bleeding through.
+    // Composite: bg already drawn on ctx (fully opaque), overlay fg with
+    // alpha mask. The opaque bg covers the stage's original photo underneath.
     const pm = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
     const fg = document.createElement('canvas');
     fg.width = w; fg.height = h;
     const fctx = fg.getContext('2d');
     if (!fctx) return;
-    fctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
+    if (this.refineKind === 'retouch' && this.refineWhitened) {
+      fctx.drawImage(this.refineWhitened, 0, 0, this.refineWhitenedW, this.refineWhitenedH, 0, 0, w, h);
+    } else {
+      fctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
+    }
     const fgImg = fctx.getImageData(0, 0, w, h);
     const fd = fgImg.data;
     for (let i = 0, j = 0; i < pm.length; i++, j += 4) {
@@ -2362,8 +2392,62 @@ export class AurumEditor extends AurumCore {
     // brush ring hint is native cursor; keep pointer-events auto
   }
 
+  private syncBrushChrome(): void {
+    const retouch = this.refineKind === 'retouch';
+    if (this.maskInvertBtn) this.maskInvertBtn.style.display = retouch ? 'none' : '';
+    if (this.maskTransparentBtn) this.maskTransparentBtn.style.display = retouch ? 'none' : '';
+    if (this.maskHintEl) this.maskHintEl.textContent = retouch ? this.s.retouchBrushHint : this.s.brushHint;
+    if (this.maskToolLabelEl) this.maskToolLabelEl.textContent = this.s.brushLabel;
+    if (!retouch) this.syncMaskTransparentBtn();
+  }
+
+  private ensureRefineCanvas(): void {
+    if (this.refineCanvas) return;
+    const c = document.createElement('canvas');
+    c.className = 'au-maskprev';
+    c.setAttribute('aria-hidden', 'true');
+    // pointer handlers for brush (Apple: 1:1, offset preserved, capture)
+    const onDown = (e: PointerEvent) => {
+      if (!this.refineOn) return;
+      e.preventDefault();
+      try { c.setPointerCapture(e.pointerId); } catch {}
+      if (this.refineMask) this.refineHistory.push(new Float32Array(this.refineMask));
+      if (this.refineHistory.length > 20) this.refineHistory.shift();
+      this.refineStroke = { pointerId: e.pointerId, snapshotTaken: true };
+      this.brushAt(e);
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!this.refineStroke || this.refineStroke.pointerId !== e.pointerId) return;
+      e.preventDefault();
+      this.brushAt(e);
+    };
+    const onUp = () => { this.refineStroke = null; this.drawRefinePreview(); };
+    c.addEventListener('pointerdown', onDown);
+    c.addEventListener('pointermove', onMove);
+    c.addEventListener('pointerup', onUp);
+    c.addEventListener('pointercancel', onUp);
+    this.stage.appendChild(c);
+    this.refineCanvas = c;
+  }
+
+  private showBrush(): void {
+    this.ensureRefineCanvas();
+    this.refineCanvas.style.display = 'block';
+    this.maskToolbar.style.display = 'block';
+    // Hide model + action list while refining (dock becomes mask tools only)
+    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
+      if (el) el.style.display = 'none';
+    }
+    this.syncBrushChrome();
+    this.positionTexts();
+    this.drawRefinePreview();
+    this.showTab('ai');
+  }
+
   private enterRefine(source: CanvasImageSource, w: number, h: number, mask: Float32Array, mw: number, mh: number, mode: BackgroundMode, modelId: string): void {
     this.refineOn = true;
+    this.refineKind = 'bg';
+    this.refineWhitened = null;
     this.refineSource = source;
     this.refineWidth = w; this.refineHeight = h;
     this.refineMaskWidth = mw; this.refineMaskHeight = mh;
@@ -2373,43 +2457,26 @@ export class AurumEditor extends AurumCore {
     this.refineBaseMode = mode;
     this.refineModelId = modelId;
     this.refineHistory = [];
-    this.syncMaskTransparentBtn();
-    if (!this.refineCanvas) {
-      const c = document.createElement('canvas');
-      c.className = 'au-maskprev';
-      c.setAttribute('aria-hidden', 'true');
-      // pointer handlers for brush (Apple: 1:1, offset preserved, capture)
-      const onDown = (e: PointerEvent) => {
-        if (!this.refineOn) return;
-        e.preventDefault();
-        try { c.setPointerCapture(e.pointerId); } catch {}
-        if (this.refineMask) this.refineHistory.push(new Float32Array(this.refineMask));
-        if (this.refineHistory.length > 20) this.refineHistory.shift();
-        this.refineStroke = { pointerId: e.pointerId, snapshotTaken: true };
-        this.brushAt(e);
-      };
-      const onMove = (e: PointerEvent) => {
-        if (!this.refineStroke || this.refineStroke.pointerId !== e.pointerId) return;
-        e.preventDefault();
-        this.brushAt(e);
-      };
-      const onUp = () => { this.refineStroke = null; this.drawRefinePreview(); };
-      c.addEventListener('pointerdown', onDown);
-      c.addEventListener('pointermove', onMove);
-      c.addEventListener('pointerup', onUp);
-      c.addEventListener('pointercancel', onUp);
-      this.stage.appendChild(c);
-      this.refineCanvas = c;
-    }
-    this.refineCanvas.style.display = 'block';
-    this.maskToolbar.style.display = 'block';
-    // Hide model + action list while refining (dock becomes mask tools only)
-    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
-      if (el) el.style.display = 'none';
-    }
-    this.positionTexts();
-    this.drawRefinePreview();
-    this.showTab('ai');
+    this.showBrush();
+  }
+
+  private enterRetouchBrush(
+    source: CanvasImageSource, w: number, h: number,
+    mask: Float32Array, mw: number, mh: number,
+    whitened: CanvasImageSource, whitenW: number, whitenH: number,
+  ): void {
+    this.refineOn = true;
+    this.refineKind = 'retouch';
+    this.refineWhitened = whitened;
+    this.refineWhitenedW = whitenW; this.refineWhitenedH = whitenH;
+    this.refineSource = source;
+    this.refineWidth = w; this.refineHeight = h;
+    this.refineMaskWidth = mw; this.refineMaskHeight = mh;
+    this.refineMask = new Float32Array(mask);
+    this.refineOriginalMask = new Float32Array(mask);
+    this.refineModelId = 'blazeface-onnx';
+    this.refineHistory = [];
+    this.showBrush();
   }
 
   private brushAt(e: PointerEvent): void {
@@ -2440,7 +2507,7 @@ export class AurumEditor extends AurumCore {
   }
 
   private refineInvert(): void {
-    if (!this.refineOn || !this.refineMask) return;
+    if (!this.refineOn || !this.refineMask || this.refineKind === 'retouch') return;
     this.refineHistory.push(new Float32Array(this.refineMask));
     if (this.refineHistory.length > 20) this.refineHistory.shift();
     const data = this.refineMask;
@@ -2451,7 +2518,7 @@ export class AurumEditor extends AurumCore {
   }
 
   private refineToggleTransparent(): void {
-    if (!this.refineOn || !this.refineMask) return;
+    if (!this.refineOn || !this.refineMask || this.refineKind === 'retouch') return;
     const transparent = this.refineMode === 'remove' || this.refineMode === 'person';
     if (transparent) {
       // Restore the original blur/white mode; if base was already
@@ -2468,6 +2535,8 @@ export class AurumEditor extends AurumCore {
 
   private cancelRefine(): void {
     this.refineOn = false;
+    this.refineKind = 'bg';
+    this.refineWhitened = null;
     this.refineMask = null;
     this.refineHistory = [];
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
@@ -2486,43 +2555,71 @@ export class AurumEditor extends AurumCore {
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    // Build background
-    if (this.refineMode === 'replace') {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, w, h);
-    } else if (this.refineMode === 'blur') {
-      const small = document.createElement('canvas');
-      small.width = Math.max(1, w >> 3); small.height = Math.max(1, h >> 3);
-      const sctx = small.getContext('2d');
-      if (sctx) {
-        sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
-        sctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, small.width, small.height);
-        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(small, 0, 0, w, h);
+    if (this.refineKind === 'retouch') {
+      if (!this.refineWhitened) return;
+      // Blend original -> whitened by the brushed weight (0 = original).
+      const origCanvas = document.createElement('canvas');
+      origCanvas.width = w; origCanvas.height = h;
+      const octx = origCanvas.getContext('2d');
+      const whiteCanvas = document.createElement('canvas');
+      whiteCanvas.width = w; whiteCanvas.height = h;
+      const wctx = whiteCanvas.getContext('2d');
+      if (!octx || !wctx) return;
+      octx.drawImage(this.refineSource, 0, 0, w, h);
+      wctx.drawImage(this.refineWhitened, 0, 0, this.refineWhitenedW, this.refineWhitenedH, 0, 0, w, h);
+      const oImg = octx.getImageData(0, 0, w, h);
+      const wImg = wctx.getImageData(0, 0, w, h);
+      const od = oImg.data, wd = wImg.data;
+      for (let i = 0, j = 0; i < fullMask.length; i++, j += 4) {
+        const m = Math.min(1, Math.max(0, fullMask[i] ?? 0));
+        if (m <= 0) continue;
+        const inv = 1 - m;
+        od[j] = Math.round((od[j] ?? 0) * inv + (wd[j] ?? 0) * m);
+        od[j + 1] = Math.round((od[j + 1] ?? 0) * inv + (wd[j + 1] ?? 0) * m);
+        od[j + 2] = Math.round((od[j + 2] ?? 0) * inv + (wd[j + 2] ?? 0) * m);
+        od[j + 3] = 255;
       }
+      ctx.putImageData(oImg, 0, 0);
+    } else {
+      // Build background
+      if (this.refineMode === 'replace') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+      } else if (this.refineMode === 'blur') {
+        const small = document.createElement('canvas');
+        small.width = Math.max(1, w >> 3); small.height = Math.max(1, h >> 3);
+        const sctx = small.getContext('2d');
+        if (sctx) {
+          sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
+          sctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, small.width, small.height);
+          ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(small, 0, 0, w, h);
+        }
+      }
+      // Foreground with mask
+      const fg = document.createElement('canvas');
+      fg.width = w; fg.height = h;
+      const fctx = fg.getContext('2d');
+      if (!fctx) return;
+      fctx.drawImage(this.refineSource, 0, 0);
+      const img = fctx.getImageData(0, 0, w, h);
+      const d = img.data;
+      for (let i = 0, j = 0; i < fullMask.length; i++, j += 4) {
+        d[j + 3] = Math.round(Math.min(1, Math.max(0, fullMask[i] ?? 0)) * 255);
+      }
+      fctx.putImageData(img, 0, 0);
+      ctx.drawImage(fg, 0, 0);
     }
-    // Foreground with mask
-    const fg = document.createElement('canvas');
-    fg.width = w; fg.height = h;
-    const fctx = fg.getContext('2d');
-    if (!fctx) return;
-    fctx.drawImage(this.refineSource, 0, 0);
-    const img = fctx.getImageData(0, 0, w, h);
-    const d = img.data;
-    for (let i = 0, j = 0; i < fullMask.length; i++, j += 4) {
-      d[j + 3] = Math.round(Math.min(1, Math.max(0, fullMask[i] ?? 0)) * 255);
-    }
-    fctx.putImageData(img, 0, 0);
-    ctx.drawImage(fg, 0, 0);
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
     if (!blob) {
       this.toast(this.s.bgFailed, true);
       return;
     }
+    const wasRetouch = this.refineKind === 'retouch';
     this.cancelRefine();
     await this.load(blob);
     this.showTab('adjust');
-    this.toast(this.s.bgDone);
+    this.toast(wasRetouch ? this.s.retouchDone : this.s.bgDone);
   }
 
   /**
@@ -3574,11 +3671,28 @@ export class AurumEditor extends AurumCore {
     this.bgPanel.hidden = false;
     this.bgPanel.classList.add('is-open');
     this.bgDetail.textContent = this.s.bgRunning;
+    const sourceBefore = this.sourceBitmap();
+    const sizeBefore = this.source();
     try {
-      await this.retouchAction.run(this, {
+      const result = await this.retouchAction.run(this, {
         signal: controller.signal,
         report: (_p, label) => { if (label) this.bgDetail.textContent = label; },
       }, mode);
+      if (controller.signal.aborted) return;
+      // Whiten returns mask + whitened image -> enter brush to adjust weight
+      // (Giữ = whiten more, Xoá = undo whitening) before Hoàn tất.
+      if (result && (result as RetouchBrushResult).mask && (result as RetouchBrushResult).whitened) {
+        const m = result as RetouchBrushResult;
+        if (sourceBefore) {
+          this.enterRetouchBrush(
+            sourceBefore, sizeBefore.width, sizeBefore.height,
+            m.mask, m.maskWidth, m.maskHeight,
+            m.whitened, m.whitenWidth, m.whitenHeight,
+          );
+          this.toast(this.s.retouchBrushReady);
+          return;
+        }
+      }
       if (!controller.signal.aborted) this.toast(this.s.retouchDone);
     } catch (error) {
       if (isAbortError(error) || controller.signal.aborted) this.toast(this.s.aiCancelled);
