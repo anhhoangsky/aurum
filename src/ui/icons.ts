@@ -18,6 +18,10 @@ export type IconName =
   | 'copy'
   | 'auto'
   | 'ai'
+  | 'wand'
+  | 'brush'
+  | 'eraser'
+  | 'magic'
   | 'liquify'
   | 'reset'
   | 'check'
@@ -27,7 +31,10 @@ export type IconName =
   | 'bookmark'
   | 'trash'
   | 'plus'
-  | 'duplicate';
+  | 'duplicate'
+  | 'layers'
+  | 'contrast'
+  | 'slider';
 
 const PATHS: Record<IconName, string> = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -67,6 +74,20 @@ const PATHS: Record<IconName, string> = {
     '<path d="M12 3.2l1.55 4.25L17.8 9l-4.25 1.55L12 14.8l-1.55-4.25L6.2 9l4.25-1.55L12 3.2Z"/><path d="M18.4 14.4l.72 1.98 1.98.72-1.98.72-.72 1.98-.72-1.98-1.98-.72 1.98-.72.72-1.98Z"/><path d="M5.4 14.8l.55 1.5 1.5.55-1.5.55-.55 1.5-.55-1.5-1.5-.55 1.5-.55.55-1.5Z"/>',
   ai:
     '<path d="M12 2.8l2.05 5.15L19.2 10l-5.15 2.05L12 17.2l-2.05-5.15L4.8 10l5.15-2.05L12 2.8Z"/><path d="M18.6 15.4v3.2M17 17h3.2"/><path d="M5.4 4.2v2.4M4.2 5.4h2.4"/>',
+  wand:
+    '<path d="M5 19.2 15.4 8.8"/><path d="M14.5 3.5l1.7 1.7M17.2 6.2l1.7 1.7M19 3.5l.9.9M14.5 3.5l.9-.9M19 3.5l.9 1.7M18.5 13.5l1.2 1.2M18.1 10.2l1.9.5M13.2 4.1l.4 2.1M9.8 3.2l.4 2.1M5.5 5.5l1.7 1.7"/>',
+  brush:
+    '<path d="M16.5 3.5l4 4L11 17 6.5 17.8 7 13.2 16.5 3.5Z"/><path d="M6.5 17.8l1.7 1.7"/><path d="M12.5 13.5l-1.5 1.5"/>',
+  eraser:
+    '<path d="M6 13.5 13.5 6l4.5 4.5L12.5 16 6 13.5Z"/><path d="M6 13.5v4.5h3"/>',
+  magic:
+    '<path d="M12 2.8l2.05 5.15L19.2 10l-5.15 2.05L12 17.2l-2.05-5.15L4.8 10l5.15-2.05L12 2.8Z"/><circle cx="12" cy="10" r="2.3"/>',
+  layers:
+    '<path d="M12 3.5 21 8.5l-9 5-9-5 9-5Z"/><path d="M3 12.5l9 5 9-5"/>',
+  contrast:
+    '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor" stroke="none"/>',
+  slider:
+    '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   liquify:
     '<path d="M3.5 15.8c3.4-7.2 7.9 5.6 11.5-.9 1.4-2.5 3.3-3.1 5.5-1.8"/><path d="M3.5 9.6c3.4-7.2 7.9 5.6 11.5-.9 1.4-2.5 3.3-3.1 5.5-1.8"/>',
   reset:

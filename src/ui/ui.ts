@@ -199,6 +199,43 @@ const STRINGS = {
     bgRunning: 'Đang tách nền…',
     bgDone: 'Đã tách nền — cảnh báo: lịch sử chỉnh sửa được đặt lại.',
     bgFailed: 'Chưa tách được nền',
+    tuneTitle: 'Tùy chỉnh tone',
+    tuneHint: 'Chọn tone, kéo slider để tinh chỉnh rồi Lưu.',
+    tuneStrength: 'Độ đậm',
+    tuneBright: 'Sáng',
+    tuneContrast: 'Tương phản',
+    tuneSat: 'Bão hòa',
+    tuneWarm: 'Ấm',
+    tuneTint: 'Sắc thái',
+    tuneVig: 'Mờ góc',
+    tuneReset: 'Reset tone',
+    modelLabel: 'Model',
+    modelFast: 'MODNet · Nhanh',
+    modelBalanced: 'BiRefNet · Cân bằng',
+    modelQuality: 'ISNet · Chất lượng',
+    modelRecommended: 'Khuyến nghị',
+    modelDetailFast: '13 MB · Tách người · iPhone siêu nhẹ',
+    modelDetailBalanced: '98 MB · Đa dụng · Chân dung + vật',
+    modelDetailQuality: '88 MB · Tốt nhất · Edge tóc mịn',
+    brushLabel: 'Cọ',
+    brushAdd: 'Giữ (thêm)',
+    brushErase: 'Xoá',
+    brushSizeMask: 'Kích thước cọ',
+    brushUndo: 'Hoàn tác nét',
+    brushApply: 'Hoàn tất',
+    brushCancel: 'Huỷ',
+    brushHint: 'Chạm kéo trên ảnh để chỉnh viền. Thêm = giữ chủ thể, Xoá = bỏ nền.',
+    textPinch: 'Chụm 2 ngón để co giãn · Xoay bằng ngón xoay',
+    textDoubleTap: 'Chạm đúp vào chữ để sửa',
+    textStyleTitle: 'Kiểu chữ',
+    textStyleTitle2: 'Chữ đậm',
+    textStyleCaption: 'Chú thích',
+    textStyleOutline: 'Viền nổi',
+    textQuick: 'Mẫu nhanh',
+    textArrange: 'Căn chỉnh',
+    textAlignLeft: 'Trái',
+    textAlignCenter: 'Giữa',
+    textAlignRight: 'Phải',
   },
   en: {
     title: 'Edit photo',
@@ -377,6 +414,43 @@ const STRINGS = {
     bgRunning: 'Removing background…',
     bgDone: 'Background removed — note: edit history is reset.',
     bgFailed: 'Could not remove background',
+    tuneTitle: 'Tone tune',
+    tuneHint: 'Pick a tone, drag sliders to refine, then Save.',
+    tuneStrength: 'Strength',
+    tuneBright: 'Brightness',
+    tuneContrast: 'Contrast',
+    tuneSat: 'Saturation',
+    tuneWarm: 'Warmth',
+    tuneTint: 'Tint',
+    tuneVig: 'Vignette',
+    tuneReset: 'Reset tune',
+    modelLabel: 'Model',
+    modelFast: 'MODNet · Fast',
+    modelBalanced: 'BiRefNet · Balanced',
+    modelQuality: 'ISNet · Quality',
+    modelRecommended: 'Recommended',
+    modelDetailFast: '13 MB · Portrait · iPhone light',
+    modelDetailBalanced: '98 MB · General · Portrait + object',
+    modelDetailQuality: '88 MB · Best · Fine hair edge',
+    brushLabel: 'Brush',
+    brushAdd: 'Keep (add)',
+    brushErase: 'Erase',
+    brushSizeMask: 'Brush size',
+    brushUndo: 'Undo stroke',
+    brushApply: 'Done',
+    brushCancel: 'Cancel',
+    brushHint: 'Drag on the photo to fix edges. Keep = foreground, Erase = background.',
+    textPinch: 'Pinch to resize · Twist to rotate',
+    textDoubleTap: 'Double-tap text to edit',
+    textStyleTitle: 'Title',
+    textStyleTitle2: 'Bold title',
+    textStyleCaption: 'Caption',
+    textStyleOutline: 'Outline',
+    textQuick: 'Quick styles',
+    textArrange: 'Align',
+    textAlignLeft: 'Left',
+    textAlignCenter: 'Center',
+    textAlignRight: 'Right',
   },
 } as const;
 
@@ -404,23 +478,35 @@ export interface AIAction {
 }
 
 export type BackgroundMode = 'remove' | 'blur' | 'replace' | 'person';
+export type AiModelId = 'isnet-fp16' | 'birefnet-lite-512-fp16' | 'modnet-fp16';
 
 export interface BackgroundActionContext {
   signal: AbortSignal;
   report: (progress: number, label?: string) => void;
+  modelId?: AiModelId;
+}
+
+export interface BackgroundMaskResult {
+  maskWidth: number;
+  maskHeight: number;
+  mask: Float32Array;
+  modelId: string;
+  mode: BackgroundMode;
 }
 
 export interface BackgroundAction {
   /**
-   * Run background removal / blur / replace using the standalone ai-engine
-   * bundle. The host owns ORT + model install; the editor UI only supplies
-   * the original-resolution bitmap and an AbortSignal.
+   * Run background inference using the standalone ai-engine bundle.
+   * If the return value is a BackgroundMaskResult, the UI enters brush
+   * refine mode (remove/person). Otherwise the host has already loaded
+   * the composited image via editor.load() (blur/replace legacy path).
    */
   run: (
     editor: AurumEditor,
     context: BackgroundActionContext,
     mode: BackgroundMode,
-  ) => Promise<void>;
+    modelId: AiModelId,
+  ) => Promise<BackgroundMaskResult | void>;
 }
 
 export interface AurumUIOptions extends Omit<AurumCoreOptions, 'container'> {
@@ -498,7 +584,7 @@ const TABS: { id: TabId; icon: IconName; label: keyof UIStrings }[] = [
   { id: 'adjust', icon: 'adjust', label: 'tabAdjust' },
   { id: 'filter', icon: 'filter', label: 'tabFilter' },
   { id: 'text', icon: 'text', label: 'tabText' },
-  { id: 'ai', icon: 'ai', label: 'tabAi' },
+  { id: 'ai', icon: 'wand', label: 'tabAi' },
   { id: 'crop', icon: 'crop', label: 'tabCrop' },
 ];
 
@@ -607,11 +693,14 @@ const TEXT_FONTS: { id: string; label: string; stack: string }[] = [
   { id: 'mono', label: 'Mono', stack: "'SF Mono',Menlo,Consolas,monospace" },
   { id: 'round', label: 'Rounded', stack: "'Arial Rounded MT Bold','Helvetica Neue',sans-serif" },
   { id: 'heavy', label: 'Heavy', stack: "'Arial Black',Impact,sans-serif" },
+  { id: 'title', label: 'Title', stack: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif" },
+  { id: 'caption', label: 'Caption', stack: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif" },
 ];
 
 function defaultTextLayer(): AurumTextLayer {
+  const id = `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
   return {
-    id: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
+    id,
     text: '',
     x: 0.5,
     y: 0.5,
@@ -626,6 +715,18 @@ function defaultTextLayer(): AurumTextLayer {
     opacity: 1,
     font: 'sys',
   };
+}
+
+function applyTextStyle(layer: AurumTextLayer, style: string): void {
+  if (style === 'title') {
+    layer.font = 'sys'; layer.bold = true; layer.size = 0.11; layer.outline = false; layer.shadow = true; layer.color = '#ffffff';
+  } else if (style === 'bold') {
+    layer.font = 'heavy'; layer.bold = true; layer.size = 0.09; layer.outline = false; layer.shadow = false;
+  } else if (style === 'caption') {
+    layer.font = 'sys'; layer.bold = false; layer.italic = false; layer.size = 0.045; layer.outline = false; layer.shadow = false;
+  } else if (style === 'outline') {
+    layer.font = 'heavy'; layer.bold = true; layer.size = 0.09; layer.outline = true; layer.shadow = false; layer.color = '#ffffff';
+  }
 }
 
 const USER_PRESET_KEY = 'aurum:user-presets:v1';
@@ -785,11 +886,43 @@ export class AurumEditor extends AurumCore {
   private filterSaveBtn!: HTMLButtonElement;
   private savedList!: HTMLElement;
   private userPresets: UserPreset[] = loadUserPresets();
+  // Filter tune (custom sliders per tone)
+  private filterTuneKey: keyof Adjustments = 'brightness';
+  private filterTuneTicks!: TickControl;
+  private filterTuneValue!: HTMLButtonElement;
+  private filterTuneButtons = new Map<keyof Adjustments, HTMLButtonElement>();
+  private filterTuneWrap!: HTMLElement;
   private backgroundAction?: BackgroundAction;
   private bgBusy = false;
   private bgAbort: AbortController | null = null;
   private bgDetail!: HTMLElement;
   private bgPanel!: HTMLElement;
+  private bgModel: AiModelId = (() => {
+    try {
+      const v = localStorage.getItem('aurum:ai-model');
+      return (v === 'isnet-fp16' || v === 'birefnet-lite-512-fp16' || v === 'modnet-fp16') ? (v as AiModelId) : 'isnet-fp16';
+    } catch { return 'isnet-fp16'; }
+  })();
+  private bgModelButtons = new Map<AiModelId, HTMLButtonElement>();
+  private bgModelDetail!: HTMLElement;
+  // Mask brush refine state
+  private refineCanvas!: HTMLCanvasElement;
+  private refineOn = false;
+  private refineSource: CanvasImageSource | null = null;
+  private refineWidth = 0;
+  private refineHeight = 0;
+  private refineMaskWidth = 0;
+  private refineMaskHeight = 0;
+  private refineMask: Float32Array | null = null;
+  private refineOriginalMask: Float32Array | null = null;
+  private refineMode: BackgroundMode = 'remove';
+  private refineModelId = '';
+  private brushMode: 'add' | 'erase' = 'add';
+  private brushSize = 7;
+  private refineHistory: Float32Array[] = [];
+  private refineStroke: { pointerId: number; snapshotTaken: boolean } | null = null;
+  private maskToolbar!: HTMLElement;
+  private maskBrushTicks!: TickControl;
   private textLayer!: HTMLElement;
   private texts: AurumTextLayer[] = [];
   private selectedTextId: string | null = null;
@@ -1565,6 +1698,70 @@ export class AurumEditor extends AurumCore {
     context.appendChild(this.filterWrap);
     pane.appendChild(context);
 
+    // --- Tune per tone: sliders that write Adjust (stack on the preset, saveable) ---
+    const tune = el('div', 'au-tune');
+    tune.setAttribute('aria-label', this.s.tuneTitle);
+    const tuneHead = el('div', 'au-tune__head');
+    const tuneTitle = el('span', 'au-tune__title');
+    tuneTitle.textContent = this.s.tuneTitle;
+    const tuneHint = el('span', 'au-tune__hint');
+    tuneHint.textContent = this.s.tuneHint;
+    const tuneReset = el('button', 'au-chip au-tune__reset');
+    tuneReset.type = 'button';
+    tuneReset.textContent = this.s.tuneReset;
+    tuneReset.addEventListener('click', () => {
+      for (const key of (['brightness','contrast','saturation','warmth','tint','vignette','vibrance'] as const)) {
+        this.setAdjust(key, key === 'vignette' ? 0 : 0);
+      }
+      this.syncTuneUI();
+    });
+    tuneHead.append(tuneTitle, tuneHint, tuneReset);
+    const tuneRow = el('div', 'au-tune__row');
+    const tuneChips = el('div', 'au-params au-tune__chips');
+    const tuneKeys: (keyof Adjustments)[] = ['brightness','contrast','saturation','warmth','tint','vibrance','vignette'];
+    const keyLabels: Record<keyof Adjustments, keyof UIStrings> = {
+      brightness: 'brightnessShort', contrast: 'contrastShort', saturation: 'saturationShort',
+      warmth: 'warmthShort', tint: 'tintShort', vibrance: 'vibranceShort', vignette: 'vignetteShort',
+    } as any;
+    // Use localized labels via s, fallback to key
+    for (const key of tuneKeys) {
+      const b = el('button', 'au-param');
+      b.type = 'button';
+      b.dataset.tune = key;
+      const short = (this.s as any)[keyLabels[key]] as string | undefined;
+      b.textContent = short ?? key;
+      b.setAttribute('aria-pressed', String(key === this.filterTuneKey));
+      b.addEventListener('click', () => this.selectFilterTune(key));
+      this.filterTuneButtons.set(key, b);
+      tuneChips.appendChild(b);
+    }
+    this.filterTuneValue = el('button', 'au-value au-glass au-glass--gold');
+    this.filterTuneValue.type = 'button';
+    this.filterTuneValue.setAttribute('aria-label', this.s.tuneTitle);
+    this.filterTuneValue.addEventListener('click', () => {
+      // double-purpose: tap value resets current tune key (like Adjust)
+      this.resetAdjust(this.filterTuneKey);
+      this.syncTuneUI();
+    });
+    tuneRow.append(tuneChips, this.filterTuneValue);
+    const tuneContext = el('div', 'au-tune__slider');
+    this.filterTuneTicks = this.makeTicks({
+      label: this.s.tuneTitle,
+      min: -100, max: 100, step: 1, tickStep: 5, defaultValue: 0,
+      zero: true, head: false, ruler: true,
+      format: (v) => this.formatTune(v),
+      onInput: (v) => {
+        if (this.filterTuneKey === 'vignette') this.setAdjust('vignette', clamp(v, 0, 100));
+        else this.setAdjust(this.filterTuneKey, v);
+        this.syncTuneUI();
+      },
+    });
+    tuneContext.appendChild(this.filterTuneTicks.row);
+    this.filterTuneWrap = tune;
+    tune.append(tuneHead, tuneRow, tuneContext);
+    pane.appendChild(tune);
+    this.selectFilterTune(this.filterTuneKey);
+
     // --- Saved filters (localStorage, per-device Aurum only) ---
     const saved = el('div', 'au-saved');
     const savedHead = el('div', 'au-saved__head');
@@ -1597,6 +1794,47 @@ export class AurumEditor extends AurumCore {
     this.renderSavedPresets();
   }
 
+  private selectFilterTune(key: keyof Adjustments): void {
+    this.filterTuneKey = key;
+    for (const [id, btn] of this.filterTuneButtons) {
+      btn.setAttribute('aria-pressed', String(id === key));
+    }
+    const [min, max] = ADJUST_RANGES[key];
+    this.filterTuneTicks.setRange(min, max, 1, 5, min < 0);
+    this.filterTuneTicks.setLabel(`${this.s.tuneTitle} · ${key}`);
+    const state = this.isReady ? this.getState() : null;
+    const value = state ? Math.round(state.adjust[key]) : 0;
+    this.filterTuneTicks.set(value, false);
+    this.syncTuneUI();
+    // Center chip
+    const btn = this.filterTuneButtons.get(key);
+    if (btn) {
+      window.requestAnimationFrame(() => {
+        const rail = btn.parentElement as HTMLElement | null;
+        if (!rail) return;
+        const r = btn.getBoundingClientRect();
+        const rr = rail.getBoundingClientRect();
+        if (!r.width || !rr.width) return;
+        const delta = r.left - rr.left - (rr.width - r.width) / 2;
+        if (Math.abs(delta) > 1) rail.scrollBy({ left: delta, behavior: 'smooth' });
+      });
+    }
+  }
+
+  private formatTune(value: number): string {
+    const [min] = ADJUST_RANGES[this.filterTuneKey];
+    return min >= 0 ? String(Math.round(value)) : signed(Math.round(value));
+  }
+
+  private syncTuneUI(): void {
+    if (!this.isReady || !this.filterTuneTicks) return;
+    const state = this.getState();
+    const active = document.activeElement;
+    const value = Math.round(state.adjust[this.filterTuneKey]);
+    if (active !== this.filterTuneTicks.rail) this.filterTuneTicks.set(value, false);
+    if (this.filterTuneValue) this.filterTuneValue.textContent = this.formatTune(value);
+  }
+
   // ---------------------------------------------------------------- text pane
   private buildTextPane(pane: HTMLElement): void {
     const top = el('div', 'au-deck__row au-deck__row--top au-text-top');
@@ -1608,6 +1846,10 @@ export class AurumEditor extends AurumCore {
     add.addEventListener('click', () => this.addTextLayer());
     top.append(hint, add);
     pane.appendChild(top);
+
+    const sub = el('div', 'au-text-sub');
+    sub.innerHTML = `<span>${escHtml(this.s.textPinch)}</span><span class="au-text-dot">·</span><span>${escHtml(this.s.textDoubleTap)}</span>`;
+    pane.appendChild(sub);
 
     const body = el('div', 'au-text-body');
     const input = document.createElement('textarea');
@@ -1628,11 +1870,44 @@ export class AurumEditor extends AurumCore {
     body.appendChild(input);
     pane.appendChild(body);
 
+    // Quick styles — Meitu style single-tap presets (Apple: Familiarity + Craft)
+    const quick = el('div', 'au-quick-styles');
+    const quickLabel = el('span', 'au-quick-label');
+    quickLabel.textContent = this.s.textQuick;
+    quick.appendChild(quickLabel);
+    const quickRow = el('div', 'au-quick-row');
+    const styleDefs = [
+      { id: 'title', label: this.s.textStyleTitle },
+      { id: 'bold', label: this.s.textStyleTitle2 },
+      { id: 'caption', label: this.s.textStyleCaption },
+      { id: 'outline', label: this.s.textStyleOutline },
+    ];
+    for (const def of styleDefs) {
+      const b = el('button', 'au-quick-chip');
+      b.type = 'button';
+      b.textContent = def.label;
+      b.dataset.style = def.id;
+      b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', () => {
+        const layer = this.selectedLayer();
+        if (!layer) return;
+        applyTextStyle(layer, def.id);
+        for (const child of Array.from(quickRow.children)) child.setAttribute('aria-pressed', String(child === b));
+        this.syncTextControls(layer);
+        this.syncTextLayerEl(layer);
+        this.positionTexts();
+      });
+      quickRow.appendChild(b);
+    }
+    quick.appendChild(quickRow);
+    pane.appendChild(quick);
+
     // Font + color row
     const meta = el('div', 'au-text-meta');
     const fontSeg = el('div', 'au-seg au-text-fonts');
     fontSeg.setAttribute('role', 'group');
-    for (const font of TEXT_FONTS) {
+    fontSeg.setAttribute('aria-label', this.s.textStyleTitle);
+    for (const font of TEXT_FONTS.slice(0, 5)) {
       const b = el('button', 'au-font-btn');
       b.type = 'button';
       b.textContent = font.label;
@@ -1643,7 +1918,6 @@ export class AurumEditor extends AurumCore {
         const layer = this.selectedLayer();
         if (!layer) return;
         layer.font = font.id;
-        const stack = TEXT_FONTS.find((f) => f.id === font.id)?.stack ?? '';
         for (const child of Array.from(fontSeg.children)) child.setAttribute('aria-pressed', String(child === b));
         this.syncTextLayerEl(layer);
       });
@@ -1669,7 +1943,30 @@ export class AurumEditor extends AurumCore {
     meta.append(fontSeg, colorWrap);
     pane.appendChild(meta);
 
-    // Toggle chips
+    // Arrange row (align left/center/right) + toggles
+    const arrangeRow = el('div', 'au-text-arrange');
+    const arrangeLabel = el('span', 'au-quick-label');
+    arrangeLabel.textContent = this.s.textArrange;
+    arrangeRow.appendChild(arrangeLabel);
+    const alignSeg = el('div', 'au-seg au-align-seg');
+    for (const a of ['left','center','right'] as const) {
+      const b = el('button', 'au-font-btn');
+      b.type = 'button';
+      b.textContent = a === 'left' ? this.s.textAlignLeft : a === 'center' ? this.s.textAlignCenter : this.s.textAlignRight;
+      b.dataset.align = a;
+      b.setAttribute('aria-pressed', String(a === 'center'));
+      b.addEventListener('click', () => {
+        const layer = this.selectedLayer();
+        if (!layer) return;
+        layer.align = a;
+        for (const child of Array.from(alignSeg.children)) child.setAttribute('aria-pressed', String(child === b));
+        this.syncTextLayerEl(layer);
+      });
+      alignSeg.appendChild(b);
+    }
+    arrangeRow.appendChild(alignSeg);
+    pane.appendChild(arrangeRow);
+
     const toggles = el('div', 'au-text-toggles');
     const mkToggle = (label: string, get: () => boolean, set: (v: boolean) => void) => {
       const b = el('button', 'au-chip');
@@ -1704,7 +2001,7 @@ export class AurumEditor extends AurumCore {
     const sliders = el('div', 'au-text-sliders');
     this.textSizeTicks = this.makeTicks({
       label: this.s.fontSize,
-      min: 2, max: 20, step: 1, tickStep: 1, defaultValue: 7,
+      min: 2, max: 24, step: 1, tickStep: 2, defaultValue: 7,
       format: (v) => `${v}%`,
       onInput: (v) => { const l = this.selectedLayer(); if (l) { l.size = v / 100; this.positionTexts(); } },
     });
@@ -1728,12 +2025,62 @@ export class AurumEditor extends AurumCore {
   // ------------------------------------------------------------------- AI pane
   private buildAIPane(pane: HTMLElement): void {
     const title = el('div', 'au-ai-pane');
-    const h = el('div', 'au-ai-pane__title');
-    h.textContent = this.s.bgTitle;
+    const h = el('div', 'au-ai-pane__head');
+    const headIcon = el('span', 'au-ai-pane__icon');
+    headIcon.innerHTML = icon('wand');
+    const headText = el('div', 'au-ai-pane__texts');
+    const titleEl = el('div', 'au-ai-pane__title');
+    titleEl.textContent = this.s.bgTitle;
     const sub = el('div', 'au-ai-pane__sub');
     sub.textContent = this.s.bgSub;
-    title.append(h, sub);
+    headText.append(titleEl, sub);
+    h.append(headIcon, headText);
+    title.appendChild(h);
     pane.appendChild(title);
+
+    // Model picker — ISNet default (user choice: quality)
+    const modelLabel = el('div', 'au-model-label');
+    modelLabel.textContent = this.s.modelLabel;
+    pane.appendChild(modelLabel);
+    const seg = el('div', 'au-seg au-model-seg');
+    seg.setAttribute('role', 'group');
+    const models: { id: AiModelId; label: keyof UIStrings; detail: keyof UIStrings; recommended?: boolean }[] = [
+      { id: 'isnet-fp16', label: 'modelQuality', detail: 'modelDetailQuality', recommended: true },
+      { id: 'birefnet-lite-512-fp16', label: 'modelBalanced', detail: 'modelDetailBalanced' },
+      { id: 'modnet-fp16', label: 'modelFast', detail: 'modelDetailFast' },
+    ];
+    for (const m of models) {
+      const b = el('button', 'au-model-btn');
+      b.type = 'button';
+      b.dataset.model = m.id;
+      b.setAttribute('aria-pressed', String(this.bgModel === m.id));
+      const name = el('span', 'au-model-btn__name');
+      name.textContent = this.s[m.label];
+      const det = el('span', 'au-model-btn__detail');
+      det.textContent = this.s[m.detail];
+      b.append(name, det);
+      if (m.recommended) {
+        const badge = el('span', 'au-model-btn__badge');
+        badge.textContent = this.s.modelRecommended || 'Khuyến nghị';
+        b.appendChild(badge);
+      }
+      b.addEventListener('click', () => {
+        this.bgModel = m.id;
+        try { localStorage.setItem('aurum:ai-model', m.id); } catch {}
+        for (const child of Array.from(seg.children)) child.setAttribute('aria-pressed', String(child === b));
+        if (this.bgModelDetail) {
+          const d = models.find((x) => x.id === m.id);
+          if (d) this.bgModelDetail.textContent = `${this.s[d.label]} · ${this.s[d.detail]}`;
+        }
+      });
+      this.bgModelButtons.set(m.id, b);
+      seg.appendChild(b);
+    }
+    pane.appendChild(seg);
+    this.bgModelDetail = el('div', 'au-model-detail');
+    const initD = models.find((x) => x.id === this.bgModel) ?? models[0];
+    this.bgModelDetail.textContent = `${this.s[initD.label]} · ${this.s[initD.detail]}`;
+    pane.appendChild(this.bgModelDetail);
 
     const list = el('div', 'au-ai-pane__list');
     const mkBtn = (mode: BackgroundMode, label: string, hint: string, primary = false) => {
@@ -1743,8 +2090,8 @@ export class AurumEditor extends AurumCore {
       row.addEventListener('click', () => void this.runBackground(mode));
       list.appendChild(row);
     };
-    mkBtn('remove', this.s.bgRemove, 'PNG trong suốt · ISNet/MODNet', true);
-    mkBtn('person', this.s.bgPerson, 'MODNet 13 MB · iPhone an toàn');
+    mkBtn('remove', this.s.bgRemove, 'PNG trong suốt · Cọ tay chỉnh viền', true);
+    mkBtn('person', this.s.bgPerson, 'MODNet 13 MB · Người · Cọ tay');
     mkBtn('blur', this.s.bgBlur, 'Mờ nền, giữ chủ thể');
     mkBtn('replace', this.s.bgReplace, 'Nền trắng sạch');
     if (!this.backgroundAction) {
@@ -1753,6 +2100,237 @@ export class AurumEditor extends AurumCore {
       list.appendChild(note);
     }
     pane.appendChild(list);
+
+    // Mask toolbar (visible when refineOn)
+    const toolbar = el('div', 'au-mask-tools');
+    toolbar.style.display = 'none';
+    const toolLabel = el('div', 'au-mask-tools__label');
+    toolLabel.textContent = this.s.brushLabel;
+    const modeSeg = el('div', 'au-seg au-mask-seg');
+    modeSeg.setAttribute('role', 'group');
+    const addBtn = el('button', 'au-mask-btn');
+    addBtn.type = 'button';
+    addBtn.innerHTML = `${icon('brush')}<span>${this.s.brushAdd}</span>`;
+    addBtn.setAttribute('aria-pressed', 'true');
+    const eraseBtn = el('button', 'au-mask-btn');
+    eraseBtn.type = 'button';
+    eraseBtn.innerHTML = `${icon('eraser')}<span>${this.s.brushErase}</span>`;
+    eraseBtn.setAttribute('aria-pressed', 'false');
+    addBtn.addEventListener('click', () => {
+      this.brushMode = 'add';
+      addBtn.setAttribute('aria-pressed', 'true');
+      eraseBtn.setAttribute('aria-pressed', 'false');
+    });
+    eraseBtn.addEventListener('click', () => {
+      this.brushMode = 'erase';
+      eraseBtn.setAttribute('aria-pressed', 'true');
+      addBtn.setAttribute('aria-pressed', 'false');
+    });
+    modeSeg.append(addBtn, eraseBtn);
+    const undoBtn = el('button', 'au-chip');
+    undoBtn.type = 'button';
+    undoBtn.innerHTML = `${icon('undo')}<span>${this.s.brushUndo}</span>`;
+    undoBtn.addEventListener('click', () => this.refineUndo());
+    const hint = el('div', 'au-mask-hint');
+    hint.textContent = this.s.brushHint;
+    this.maskBrushTicks = this.makeTicks({
+      label: this.s.brushSizeMask,
+      min: 1, max: 30, step: 1, tickStep: 2, defaultValue: this.brushSize,
+      format: (v) => `${Math.round(v)}px`,
+      onInput: (v) => { this.brushSize = Math.round(v); },
+    });
+    const actions = el('div', 'au-mask-actions');
+    const cancelBtn = el('button', 'au-chip au-chip--danger');
+    cancelBtn.type = 'button';
+    cancelBtn.innerHTML = `<span>${this.s.brushCancel}</span>`;
+    cancelBtn.addEventListener('click', () => this.cancelRefine());
+    const applyBtn = el('button', 'au-primary au-mask-apply');
+    applyBtn.type = 'button';
+    applyBtn.innerHTML = `<span>${this.s.brushApply}</span>`;
+    applyBtn.addEventListener('click', () => void this.applyRefine());
+    actions.append(cancelBtn, applyBtn);
+    toolbar.append(toolLabel, modeSeg, undoBtn, hint, this.maskBrushTicks.row, actions);
+    this.maskToolbar = toolbar;
+    pane.appendChild(toolbar);
+  }
+
+  // ------------------------------------------------------------ mask refine
+  private brushDabLocal(cx: number, cy: number, radius: number, strength: number): void {
+    if (!this.refineMask) return;
+    const w = this.refineMaskWidth, h = this.refineMaskHeight;
+    const data = this.refineMask;
+    const r = Math.max(1, radius);
+    const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.ceil(cx + r));
+    const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(h - 1, Math.ceil(cy + r));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - cx, dy = y - cy;
+        const d = Math.sqrt(dx * dx + dy * dy) / r;
+        if (d >= 1) continue;
+        const t = 1 - d;
+        const fall = t * t * (3 - 2 * t);
+        const i = y * w + x;
+        const v = strength * fall;
+        data[i] = this.brushMode === 'add' ? Math.min(1, (data[i] ?? 0) + v) : Math.max(0, (data[i] ?? 0) - v);
+      }
+    }
+  }
+
+  private resizeMaskLocal(src: Float32Array, sw: number, sh: number, dw: number, dh: number): Float32Array {
+    if (sw === dw && sh === dh) return new Float32Array(src);
+    const out = new Float32Array(dw * dh);
+    const sx = sw / dw, sy = sh / dh;
+    for (let y = 0; y < dh; y++) {
+      const fy = (y + 0.5) * sy - 0.5;
+      const y0 = Math.max(0, Math.floor(fy)), y1 = Math.min(sh - 1, y0 + 1);
+      const ty = Math.min(1, Math.max(0, fy - y0));
+      for (let x = 0; x < dw; x++) {
+        const fx = (x + 0.5) * sx - 0.5;
+        const x0 = Math.max(0, Math.floor(fx)), x1 = Math.min(sw - 1, x0 + 1);
+        const tx = Math.min(1, Math.max(0, fx - x0));
+        const top = (src[y0 * sw + x0] ?? 0) * (1 - tx) + (src[y0 * sw + x1] ?? 0) * tx;
+        const bottom = (src[y1 * sw + x0] ?? 0) * (1 - tx) + (src[y1 * sw + x1] ?? 0) * tx;
+        out[y * dw + x] = top * (1 - ty) + bottom * ty;
+      }
+    }
+    return out;
+  }
+
+  private drawRefinePreview(): void {
+    if (!this.refineOn || !this.refineCanvas || !this.refineSource || !this.refineMask) return;
+    const canvas = this.refineCanvas;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const stageSize = this.stage.clientWidth || 1;
+    const stageH = this.stage.clientHeight || 1;
+    const maxSide = 1080;
+    const k = Math.min(1, maxSide / Math.max(this.refineWidth, this.refineHeight));
+    const w = Math.max(1, Math.round(this.refineWidth * k));
+    const h = Math.max(1, Math.round(this.refineHeight * k));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const rect = this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
+    canvas.style.left = `${rect.x}px`;
+    canvas.style.top = `${rect.y}px`;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    // checker background (8px cells)
+    const cell = Math.max(4, Math.round(w / 24));
+    for (let y = 0; y < h; y += cell) {
+      for (let x = 0; x < w; x += cell) {
+        ctx.fillStyle = (Math.floor(x / cell) + Math.floor(y / cell)) % 2 === 0 ? '#3a3a3f' : '#232327';
+        ctx.fillRect(x, y, cell, cell);
+      }
+    }
+    // downscaled mask for preview
+    const pm = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
+    ctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    for (let i = 0, j = 0; i < pm.length; i++, j += 4) {
+      d[j + 3] = Math.round(Math.min(1, Math.max(0, pm[i] ?? 0)) * 255);
+    }
+    ctx.putImageData(img, 0, 0);
+    // brush ring hint is native cursor; keep pointer-events auto
+  }
+
+  private enterRefine(source: CanvasImageSource, w: number, h: number, mask: Float32Array, mw: number, mh: number, mode: BackgroundMode, modelId: string): void {
+    this.refineOn = true;
+    this.refineSource = source;
+    this.refineWidth = w; this.refineHeight = h;
+    this.refineMaskWidth = mw; this.refineMaskHeight = mh;
+    this.refineMask = new Float32Array(mask);
+    this.refineOriginalMask = new Float32Array(mask);
+    this.refineMode = mode;
+    this.refineModelId = modelId;
+    this.refineHistory = [];
+    if (!this.refineCanvas) {
+      const c = document.createElement('canvas');
+      c.className = 'au-maskprev';
+      c.setAttribute('aria-hidden', 'true');
+      // pointer handlers for brush (Apple: 1:1, offset preserved, capture)
+      const onDown = (e: PointerEvent) => {
+        if (!this.refineOn) return;
+        e.preventDefault();
+        try { c.setPointerCapture(e.pointerId); } catch {}
+        if (this.refineMask) this.refineHistory.push(new Float32Array(this.refineMask));
+        if (this.refineHistory.length > 20) this.refineHistory.shift();
+        this.refineStroke = { pointerId: e.pointerId, snapshotTaken: true };
+        this.brushAt(e);
+      };
+      const onMove = (e: PointerEvent) => {
+        if (!this.refineStroke || this.refineStroke.pointerId !== e.pointerId) return;
+        e.preventDefault();
+        this.brushAt(e);
+      };
+      const onUp = () => { this.refineStroke = null; this.drawRefinePreview(); };
+      c.addEventListener('pointerdown', onDown);
+      c.addEventListener('pointermove', onMove);
+      c.addEventListener('pointerup', onUp);
+      c.addEventListener('pointercancel', onUp);
+      this.stage.appendChild(c);
+      this.refineCanvas = c;
+    }
+    this.refineCanvas.style.display = 'block';
+    this.maskToolbar.style.display = 'block';
+    this.positionTexts();
+    this.drawRefinePreview();
+    this.showTab('ai');
+  }
+
+  private brushAt(e: PointerEvent): void {
+    if (!this.refineCanvas || !this.refineMask) return;
+    const rect = this.refineCanvas.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return;
+    const fx = clamp01((e.clientX - rect.left) / rect.width);
+    const fy = clamp01((e.clientY - rect.top) / rect.height);
+    const cx = fx * this.refineMaskWidth;
+    const cy = fy * this.refineMaskHeight;
+    // brush radius in mask px: stage radius proportional to brushSize
+    const radius = Math.max(4, (this.brushSize / 100) * Math.min(this.refineMaskWidth, this.refineMaskHeight) * 2);
+    this.brushDabLocal(cx, cy, radius, 0.9);
+    this.drawRefinePreview();
+  }
+
+  private refineUndo(): void {
+    const prev = this.refineHistory.pop();
+    if (!prev || !this.refineMask) return;
+    this.refineMask = prev;
+    this.drawRefinePreview();
+  }
+
+  private cancelRefine(): void {
+    this.refineOn = false;
+    this.refineMask = null;
+    this.refineHistory = [];
+    if (this.refineCanvas) this.refineCanvas.style.display = 'none';
+    if (this.maskToolbar) this.maskToolbar.style.display = 'none';
+    this.positionTexts();
+  }
+
+  private async applyRefine(): Promise<void> {
+    if (!this.refineOn || !this.refineSource || !this.refineMask) return;
+    const w = this.refineWidth, h = this.refineHeight;
+    const fullMask = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(this.refineSource, 0, 0);
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    for (let i = 0, j = 0; i < fullMask.length; i++, j += 4) {
+      d[j + 3] = Math.round(Math.min(1, Math.max(0, fullMask[i] ?? 0)) * 255);
+    }
+    ctx.putImageData(img, 0, 0);
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
+    if (!blob) {
+      this.toast(this.s.bgFailed, true);
+      return;
+    }
+    this.cancelRefine();
+    await this.load(blob);
+    this.showTab('adjust');
+    this.toast(this.s.bgDone);
   }
 
   /**
@@ -2351,42 +2929,161 @@ export class AurumEditor extends AurumCore {
     node.dataset.textId = layer.id;
     node.setAttribute('aria-hidden', 'true');
     node.textContent = layer.text;
+    // Selection handles (CSS pseudo visual, no layout change on edit)
+    const hud = document.createElement('span');
+    hud.className = 'au-text-hud';
+    hud.setAttribute('aria-hidden', 'true');
+    node.appendChild(hud);
+    // Multi-pointer gesture: 1 pointer = drag, 2 pointers = pinch scale + rotate (Apple §2,5,6)
+    const pointers = new Map<number, { x: number; y: number }>();
+    let gesture: null | {
+      mode: 'drag' | 'pinch';
+      ox: number; oy: number;
+      startOX: number; startOY: number;
+      startDist: number; startAngle: number;
+      startSize: number; startRot: number;
+      midX: number; midY: number;
+      lastX: number; lastY: number;
+      velX: number; velY: number;
+    } = null;
+    let lastTap = 0;
+
     node.addEventListener('pointerdown', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      const now = performance.now();
+      if (now - lastTap < 320) {
+        // Double-tap → edit (Apple §10: only pay disambiguation where double-tap exists)
+        this.selectedTextId = layer.id;
+        this.syncTextControls(layer);
+        this.textInput?.focus();
+        this.textInput?.select();
+        lastTap = 0;
+        return;
+      }
+      lastTap = now;
       this.selectedTextId = layer.id;
       this.syncTextControls(layer);
-      try {
-        node.setPointerCapture(event.pointerId);
-      } catch {
-        // Pointer capture is best-effort on older Safari.
+      try { node.setPointerCapture(event.pointerId); } catch { /* best-effort */ }
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+      if (pointers.size === 1) {
+        gesture = {
+          mode: 'drag',
+          ox: event.clientX, oy: event.clientY,
+          startOX: layer.x, startOY: layer.y,
+          startDist: 0, startAngle: 0, startSize: layer.size, startRot: layer.rotation,
+          midX: event.clientX, midY: event.clientY,
+          lastX: event.clientX, lastY: event.clientY, velX: 0, velY: 0,
+        };
+      } else if (pointers.size === 2) {
+        const [a, b] = Array.from(pointers.values());
+        const dx = b.x - a.x, dy = b.y - a.y;
+        gesture = {
+          mode: 'pinch',
+          ox: 0, oy: 0,
+          startOX: layer.x, startOY: layer.y,
+          startDist: Math.max(1, Math.hypot(dx, dy)),
+          startAngle: Math.atan2(dy, dx),
+          startSize: layer.size, startRot: layer.rotation,
+          midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2,
+          lastX: event.clientX, lastY: event.clientY, velX: 0, velY: 0,
+        };
       }
-      const startX = event.clientX;
-      const startY = event.clientY;
-      const startOX = layer.x;
-      const startOY = layer.y;
-      let lastX = startX;
-      let lastY = startY;
-      const move = (e: PointerEvent): void => {
-        if (e.pointerId !== event.pointerId) return;
-        const rect = this.displayCropRect();
-        if (!rect || rect.width < 2 || rect.height < 2) return;
-        layer.x = clamp01(startOX + (e.clientX - startX) / rect.width);
-        layer.y = clamp01(startOY + (e.clientY - startY) / rect.height);
+    });
+
+    node.addEventListener('pointermove', (event) => {
+      if (!gesture) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const rect = this.displayCropRect();
+      if (!rect || rect.width < 2 || rect.height < 2) return;
+      if (gesture.mode === 'drag') {
+        // 1:1 tracking with grab offset (respect where grabbed)
+        const dx = event.clientX - gesture.ox;
+        const dy = event.clientY - gesture.oy;
+        // Rubber-band at edges (Apple §9): progressive resistance, not hard clamp during drag
+        let nx = gesture.startOX + dx / rect.width;
+        let ny = gesture.startOY + dy / rect.height;
+        // soft clamp with rubberband factor
+        nx = nx < 0 ? nx * 0.55 : nx > 1 ? 1 + (nx - 1) * 0.55 : nx;
+        ny = ny < 0 ? ny * 0.55 : ny > 1 ? 1 + (ny - 1) * 0.55 : ny;
+        layer.x = clamp01(nx);
+        layer.y = clamp01(ny);
+        // velocity for handoff (Apple §5)
+        gesture.velX = event.clientX - gesture.lastX;
+        gesture.velY = event.clientY - gesture.lastY;
+        gesture.lastX = event.clientX; gesture.lastY = event.clientY;
         this.positionTexts();
-        lastX = e.clientX;
-        lastY = e.clientY;
-        void lastX;
-        void lastY;
-      };
-      const end = (): void => {
-        node.removeEventListener('pointermove', move);
-        node.removeEventListener('pointerup', end);
-        node.removeEventListener('pointercancel', end);
-      };
-      node.addEventListener('pointermove', move);
-      node.addEventListener('pointerup', end);
-      node.addEventListener('pointercancel', end);
+      } else if (gesture.mode === 'pinch') {
+        const [a, b] = Array.from(pointers.values());
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.max(1, Math.hypot(dx, dy));
+        const angle = Math.atan2(dy, dx);
+        const scale = dist / gesture.startDist;
+        // Momentum projection for scale (Apple §6, decel 0.998)
+        const rawSize = gesture.startSize * scale;
+        // Clamp size 2..24% with rubberband beyond
+        layer.size = rawSize;
+        if (layer.size < 0.02) layer.size = 0.02 + (layer.size - 0.02) * 0.5;
+        if (layer.size > 0.24) layer.size = 0.24 + (layer.size - 0.24) * 0.5;
+        layer.size = clamp(layer.size, 0.015, 0.30);
+        const dDeg = ((angle - gesture.startAngle) * 180) / Math.PI;
+        layer.rotation = Math.round(((gesture.startRot + dDeg + 540) % 360) - 180);
+        // pan with mid-point movement
+        const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+        const mDx = midX - gesture.midX, mDy = midY - gesture.midY;
+        layer.x = clamp01(gesture.startOX + mDx / rect.width);
+        layer.y = clamp01(gesture.startOY + mDy / rect.height);
+        this.positionTexts();
+      }
+    });
+
+    const endPointer = (event: PointerEvent) => {
+      pointers.delete(event.pointerId);
+      if (pointers.size === 0 && gesture) {
+        // Settle with spring: critically damped response 0.3s, no overshoot (Apple §4)
+        const startSize = layer.size;
+        const target = clamp(startSize, 0.02, 0.24);
+        if (Math.abs(startSize - target) > 0.001) {
+          let v = 0;
+          let x = startSize;
+          let last = performance.now();
+          const tick = (t: number) => {
+            const dt = Math.min(0.032, (t - last) / 1000);
+            last = t;
+            // simple critically damped spring: stiffness 120, damping 2*sqrt
+            const stiffness = 120, damping = 22, mass = 1;
+            const F = -stiffness * (x - target) - damping * v;
+            v += (F / mass) * dt;
+            x += v * dt;
+            layer.size = x;
+            this.positionTexts();
+            if (Math.abs(x - target) > 0.0005 || Math.abs(v) > 0.5) requestAnimationFrame(tick);
+            else { layer.size = target; this.positionTexts(); }
+          };
+          requestAnimationFrame(tick);
+        }
+        // sync sliders after gesture
+        this.syncTextControls(layer);
+        gesture = null;
+      } else if (pointers.size === 1 && gesture) {
+        // downgrade pinch → drag with new anchor
+        const [p] = Array.from(pointers.values());
+        gesture = {
+          mode: 'drag', ox: p.x, oy: p.y, startOX: layer.x, startOY: layer.y,
+          startDist: 0, startAngle: 0, startSize: layer.size, startRot: layer.rotation,
+          midX: p.x, midY: p.y, lastX: p.x, lastY: p.y, velX: 0, velY: 0,
+        };
+      }
+    };
+    node.addEventListener('pointerup', endPointer);
+    node.addEventListener('pointercancel', endPointer);
+    node.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      this.selectedTextId = layer.id;
+      this.syncTextControls(layer);
+      this.textInput?.focus();
+      this.textInput?.select();
     });
     this.syncTextLayerStyle(node, layer);
     return node;
@@ -2503,11 +3200,26 @@ export class AurumEditor extends AurumCore {
     this.bgPanel.hidden = false;
     this.bgPanel.classList.add('is-open');
     this.bgDetail.textContent = this.s.bgRunning;
+    const sourceBefore = this.sourceBitmap();
+    const sizeBefore = this.source();
     try {
-      await this.backgroundAction.run(this, {
+      const result = await this.backgroundAction.run(this, {
         signal: controller.signal,
         report: (_p, label) => { if (label) this.bgDetail.textContent = label; },
-      }, mode);
+        modelId: this.bgModel,
+      }, mode, this.bgModel);
+      if (controller.signal.aborted) return;
+      // If host returned a mask (remove/person), enter brush refine
+      if (result && (result as BackgroundMaskResult).mask) {
+        const m = result as BackgroundMaskResult;
+        if (sourceBefore) {
+          this.enterRefine(sourceBefore, sizeBefore.width, sizeBefore.height, m.mask, m.maskWidth, m.maskHeight, mode, m.modelId);
+          this.toast('AI xong — chỉnh cọ rồi Hoàn tất');
+        } else {
+          this.toast(this.s.bgDone);
+        }
+        return;
+      }
       if (!controller.signal.aborted) this.toast(this.s.bgDone);
     } catch (error) {
       if (isAbortError(error) || controller.signal.aborted) this.toast(this.s.aiCancelled);
@@ -2757,6 +3469,8 @@ export class AurumEditor extends AurumCore {
     const result = tab !== 'crop';
     this.setResultMode(result);
     this.root.classList.toggle('is-result', result);
+    if (this.refineCanvas) this.refineCanvas.style.display = this.refineOn && tab === 'ai' ? 'block' : 'none';
+    if (this.refineOn && tab === 'ai') this.drawRefinePreview();
     this.positionTexts();
     if (!result) {
       this.positionFrame(this.currentFrame());
@@ -3200,6 +3914,7 @@ export class AurumEditor extends AurumCore {
     for (const [id, button] of this.filterButtons) {
       button.setAttribute('aria-pressed', String(state.filter === id));
     }
+    this.syncTuneUI();
     this.positionTexts();
     this.syncHistory();
   }

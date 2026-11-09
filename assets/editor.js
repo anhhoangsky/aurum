@@ -423,7 +423,7 @@ const RUNTIME_BG = {
 
 let bgEnginePromise = null;
 
-async function getBGEngine(context) {
+async function getBGEngine(context, modelId) {
   if (!bgEnginePromise) {
     context?.report?.(-1, 'Đang khởi tạo AI tách nền…');
     bgEnginePromise = (async () => {
@@ -432,23 +432,26 @@ async function getBGEngine(context) {
         offline: true,
         quality: 'medium',
         runtime: RUNTIME_BG,
+        modelId: modelId || 'isnet-fp16',
         onStatus: (m) => context?.report?.(-1, m),
       });
-      return { engine, mod };
+      return { engine, mod, modelId: modelId || 'isnet-fp16' };
     })();
   }
   return bgEnginePromise;
 }
 
-async function runBackground(editor, context, mode) {
+async function runBackground(editor, context, mode, modelId) {
   const source = editor.sourceBitmap();
   if (!source) throw new Error('Chưa có ảnh');
-  const { engine, mod } = await getBGEngine(context);
+  const requestedModel = modelId || 'isnet-fp16';
+  const { engine, mod } = await getBGEngine(context, requestedModel);
   const installed = (await engine.getInstalledModels().catch(() => [])).map((m) => m.id);
   const ensure = async (id) => {
     if (installed.includes(id)) return;
     context?.report?.(-1, `Đang tải model ${id} (1 lần, kiểm tra SHA-256)…`);
     await engine.installModel(id, '', context?.signal);
+    installed.push(id);
   };
   const report = (label) => context?.report?.(-1, label);
   let result;
@@ -457,12 +460,19 @@ async function runBackground(editor, context, mode) {
     report('Đang tách người (MODNet, offline)…');
     result = await engine.mattePerson(source, { signal: context?.signal, refineEdges: true });
   } else {
-    // Prefer the measured-best ISNet when installed; otherwise install the
-    // 13 MB iPhone-safe MODNet as the matte step + BiRefNet-free fallback.
-    // Honest ladder: engine refuses with out-of-memory instead of crashing.
-    if (!installed.includes('isnet-fp16') && !installed.includes('birefnet-lite-512-fp16')) {
+    // User-chosen model: ISNet quality by default, BiRefNet balanced, MODNet fast.
+    // Engine's quality ladder still respects memory budget and will refuse honestly.
+    const pick = requestedModel;
+    if (pick === 'modnet-fp16') {
       await ensure('modnet-fp16');
-    } else if (!installed.includes('isnet-fp16')) {
+      // Blur/replace internally use removeBackground (ISNet/BiRefNet). To keep
+      // those modes usable when only MODNet is installed, also ensure a bg model.
+      if (mode === 'blur' || mode === 'replace') {
+        try { await ensure('isnet-fp16'); } catch {}
+      }
+    } else if (pick === 'birefnet-lite-512-fp16') {
+      await ensure('birefnet-lite-512-fp16');
+    } else {
       await ensure('isnet-fp16');
     }
     if (mode === 'blur') {
@@ -479,15 +489,49 @@ async function runBackground(editor, context, mode) {
       bctx.fillRect(0, 0, width, height);
       result = await engine.replaceBackground(source, bgCanvas, { signal: context?.signal, refineEdges: true });
     } else {
-      report('Đang tách nền (offline)…');
-      result = await engine.removeBackground(source, { signal: context?.signal, refineEdges: true });
+      report(`Đang tách nền — ${pick} (offline)…`);
+      // MODNet is a person matting model, not a general background segmenter.
+      // For remove + MODNet we use person matting honestly (same mask path).
+      if (pick === 'modnet-fp16') {
+        result = await engine.mattePerson(source, { signal: context?.signal, refineEdges: true });
+      } else {
+        result = await engine.removeBackground(source, { signal: context?.signal, refineEdges: true });
+      }
     }
   }
   if (!result?.success) {
     throw new Error(result?.error?.message || 'AI chưa chạy được (cần tải model 1 lần)');
   }
-  // Turn the mask/composite into a fresh base image. load() resets history —
-  // the UI already warned the user.
+  // Remove/person: return mask for manual brush refine (UI composes final PNG)
+  if ((mode === 'remove' || mode === 'person') && result.masks?.[0]) {
+    const mask = result.masks[0];
+    // Downscale mask to 1600px max for transfer/memory, UI upscales on apply
+    const MAX = 1600;
+    const k = Math.min(1, MAX / Math.max(mask.width, mask.height));
+    const mw = Math.max(1, Math.round(mask.width * k));
+    const mh = Math.max(1, Math.round(mask.height * k));
+    let data = mask.data;
+    if (mw !== mask.width || mh !== mask.height) {
+      const out = new Float32Array(mw * mh);
+      const sx = mask.width / mw, sy = mask.height / mh;
+      for (let y = 0; y < mh; y++) {
+        const fy = (y + 0.5) * sy - 0.5;
+        const y0 = Math.max(0, Math.floor(fy)), y1 = Math.min(mask.height - 1, y0 + 1);
+        const ty = Math.min(1, Math.max(0, fy - y0));
+        for (let x = 0; x < mw; x++) {
+          const fx = (x + 0.5) * sx - 0.5;
+          const x0 = Math.max(0, Math.floor(fx)), x1 = Math.min(mask.width - 1, x0 + 1);
+          const tx = Math.min(1, Math.max(0, fx - x0));
+          const top = (mask.data[y0 * mask.width + x0] ?? 0) * (1 - tx) + (mask.data[y0 * mask.width + x1] ?? 0) * tx;
+          const bottom = (mask.data[y1 * mask.width + x0] ?? 0) * (1 - tx) + (mask.data[y1 * mask.width + x1] ?? 0) * tx;
+          out[y * mw + x] = top * (1 - ty) + bottom * ty;
+        }
+      }
+      data = out;
+    }
+    return { maskWidth: mw, maskHeight: mh, mask: data, modelId: result.metadata?.modelId || requestedModel, mode };
+  }
+  // Blur/replace: legacy immediate load (no brush v1 — composite already baked)
   if (result.composite) {
     const c = document.createElement('canvas');
     c.width = result.composite.width;
