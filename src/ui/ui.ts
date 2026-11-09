@@ -2656,7 +2656,7 @@ export class AurumEditor extends AurumCore {
     if (!this.refineOn || !this.refineCanvas) return;
     const stageSize = this.stage.clientWidth || 1;
     const stageH = this.stage.clientHeight || 1;
-    const rect = this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
+    const rect = this.imageDisplayRect() ?? this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
     this.refineCanvas.style.left = `${rect.x}px`;
     this.refineCanvas.style.top = `${rect.y}px`;
     this.refineCanvas.style.width = `${rect.width}px`;
@@ -4028,13 +4028,28 @@ export class AurumEditor extends AurumCore {
     const w = Math.max(1, Math.round(size.width * k));
     const h = Math.max(1, Math.round(size.height * k));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-    const rect = this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
+    const rect = this.imageDisplayRect() ?? this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
     canvas.style.left = `${rect.x}px`;
     canvas.style.top = `${rect.y}px`;
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
     ctx.drawImage(source, 0, 0, size.width, size.height, 0, 0, w, h);
     canvas.style.display = 'block';
+  }
+
+  /** Display rect of the full source image (including zoom/pan), in stage CSS px. */
+  private imageDisplayRect(): { x: number; y: number; width: number; height: number } | null {
+    if (!this.isReady) return null;
+    const p00 = this.screenPointAt(0, 0);
+    const p10 = this.screenPointAt(1, 0);
+    const p01 = this.screenPointAt(0, 1);
+    const p11 = this.screenPointAt(1, 1);
+    if (!p00 || !p10 || !p01 || !p11) return this.displayCropRect();
+    const x = Math.min(p00.x, p10.x, p01.x, p11.x);
+    const y = Math.min(p00.y, p10.y, p01.y, p11.y);
+    const right = Math.max(p00.x, p10.x, p01.x, p11.x);
+    const bottom = Math.max(p00.y, p10.y, p01.y, p11.y);
+    return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
   }
 
   private displayCropRect(): { x: number; y: number; width: number; height: number } | null {
@@ -4055,15 +4070,17 @@ export class AurumEditor extends AurumCore {
 
   private positionTexts(): void {
     if (!this.textLayer) return;
-    const rect = this.displayCropRect();
     const visible = this.isReady && this.currentTab !== 'crop';
     this.textLayer.style.display = visible ? 'block' : 'none';
+    if (!visible) return;
+    const rect = this.imageDisplayRect() ?? this.displayCropRect();
     if (!rect) return;
     for (const node of Array.from(this.textLayer.querySelectorAll<HTMLElement>('.au-textnode'))) {
       const layer = this.texts.find((t) => t.id === node.dataset.textId);
       if (!layer) continue;
-      const x = rect.x + layer.x * rect.width;
-      const y = rect.y + layer.y * rect.height;
+      const p = this.screenPointAt(layer.x, layer.y);
+      const x = p ? p.x : rect.x + layer.x * rect.width;
+      const y = p ? p.y : rect.y + layer.y * rect.height;
       node.style.transform = `translate(-50%,-50%) translate(${x}px,${y}px) rotate(${layer.rotation}deg)`;
       const fontPx = Math.max(10, rect.height * layer.size);
       if (node.style.fontSize !== `${fontPx}px`) node.style.fontSize = `${fontPx}px`;
