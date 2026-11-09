@@ -229,6 +229,8 @@ const STRINGS = {
     brushErase: 'Xoá',
     brushSizeMask: 'Kích thước cọ',
     brushUndo: 'Hoàn tác nét',
+    brushInvert: 'Đảo mask',
+    brushTransparent: 'Nền trong suốt',
     brushApply: 'Hoàn tất',
     brushCancel: 'Huỷ',
     brushHint: 'Chạm kéo trên ảnh để chỉnh viền. Thêm = giữ chủ thể, Xoá = bỏ nền.',
@@ -459,6 +461,8 @@ const STRINGS = {
     brushErase: 'Erase',
     brushSizeMask: 'Brush size',
     brushUndo: 'Undo stroke',
+    brushInvert: 'Invert mask',
+    brushTransparent: 'Transparent',
     brushApply: 'Done',
     brushCancel: 'Cancel',
     brushHint: 'Drag on the photo to fix edges. Keep = foreground, Erase = background.',
@@ -966,6 +970,7 @@ export class AurumEditor extends AurumCore {
   private refineMask: Float32Array | null = null;
   private refineOriginalMask: Float32Array | null = null;
   private refineMode: BackgroundMode = 'remove';
+  private refineBaseMode: BackgroundMode = 'remove';
   private refineModelId = '';
   private brushMode: 'add' | 'erase' = 'add';
   private brushSize = 7;
@@ -973,6 +978,7 @@ export class AurumEditor extends AurumCore {
   private refineStroke: { pointerId: number; snapshotTaken: boolean } | null = null;
   private maskToolbar!: HTMLElement;
   private maskBrushTicks!: TickControl;
+  private maskTransparentBtn: HTMLButtonElement | null = null;
   private textLayer!: HTMLElement;
   private texts: AurumTextLayer[] = [];
   private selectedTextId: string | null = null;
@@ -2208,10 +2214,26 @@ export class AurumEditor extends AurumCore {
       addBtn.setAttribute('aria-pressed', 'false');
     });
     modeSeg.append(addBtn, eraseBtn);
+    const quickRow = el('div', 'au-mask-quickrow');
     const undoBtn = el('button', 'au-chip');
     undoBtn.type = 'button';
     undoBtn.innerHTML = `${icon('undo')}<span>${this.s.brushUndo}</span>`;
     undoBtn.addEventListener('click', () => this.refineUndo());
+    const invertBtn = el('button', 'au-chip');
+    invertBtn.type = 'button';
+    invertBtn.innerHTML = `${icon('contrast')}<span>${this.s.brushInvert}</span>`;
+    invertBtn.setAttribute('aria-label', this.s.brushInvert);
+    invertBtn.title = this.s.brushInvert;
+    invertBtn.addEventListener('click', () => this.refineInvert());
+    const transparentBtn = el('button', 'au-chip');
+    transparentBtn.type = 'button';
+    transparentBtn.innerHTML = `${icon('layers')}<span>${this.s.brushTransparent}</span>`;
+    transparentBtn.setAttribute('aria-pressed', 'false');
+    transparentBtn.setAttribute('aria-label', this.s.brushTransparent);
+    transparentBtn.title = this.s.brushTransparent;
+    transparentBtn.addEventListener('click', () => this.refineToggleTransparent());
+    this.maskTransparentBtn = transparentBtn;
+    quickRow.append(undoBtn, invertBtn, transparentBtn);
     const hint = el('div', 'au-mask-hint');
     hint.textContent = this.s.brushHint;
     this.maskBrushTicks = this.makeTicks({
@@ -2230,7 +2252,7 @@ export class AurumEditor extends AurumCore {
     applyBtn.innerHTML = `<span>${this.s.brushApply}</span>`;
     applyBtn.addEventListener('click', () => void this.applyRefine());
     actions.append(cancelBtn, applyBtn);
-    toolbar.append(toolLabel, modeSeg, undoBtn, hint, this.maskBrushTicks.row, actions);
+    toolbar.append(toolLabel, modeSeg, quickRow, hint, this.maskBrushTicks.row, actions);
     this.maskToolbar = toolbar;
     pane.appendChild(toolbar);
   }
@@ -2355,8 +2377,10 @@ export class AurumEditor extends AurumCore {
     this.refineMask = new Float32Array(mask);
     this.refineOriginalMask = new Float32Array(mask);
     this.refineMode = mode;
+    this.refineBaseMode = mode;
     this.refineModelId = modelId;
     this.refineHistory = [];
+    this.syncMaskTransparentBtn();
     if (!this.refineCanvas) {
       const c = document.createElement('canvas');
       c.className = 'au-maskprev';
@@ -2413,6 +2437,39 @@ export class AurumEditor extends AurumCore {
     const prev = this.refineHistory.pop();
     if (!prev || !this.refineMask) return;
     this.refineMask = prev;
+    this.drawRefinePreview();
+  }
+
+  private syncMaskTransparentBtn(): void {
+    if (!this.maskTransparentBtn) return;
+    const transparent = this.refineMode === 'remove' || this.refineMode === 'person';
+    this.maskTransparentBtn.setAttribute('aria-pressed', String(transparent));
+  }
+
+  private refineInvert(): void {
+    if (!this.refineOn || !this.refineMask) return;
+    this.refineHistory.push(new Float32Array(this.refineMask));
+    if (this.refineHistory.length > 20) this.refineHistory.shift();
+    const data = this.refineMask;
+    for (let i = 0; i < data.length; i++) {
+      data[i] = 1 - (data[i] ?? 0);
+    }
+    this.drawRefinePreview();
+  }
+
+  private refineToggleTransparent(): void {
+    if (!this.refineOn || !this.refineMask) return;
+    const transparent = this.refineMode === 'remove' || this.refineMode === 'person';
+    if (transparent) {
+      // Restore the original blur/white mode; if base was already
+      // transparent keep it transparent (nothing to restore).
+      if (this.refineBaseMode === 'blur' || this.refineBaseMode === 'replace') {
+        this.refineMode = this.refineBaseMode;
+      }
+    } else {
+      this.refineMode = 'remove';
+    }
+    this.syncMaskTransparentBtn();
     this.drawRefinePreview();
   }
 
