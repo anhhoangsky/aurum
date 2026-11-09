@@ -2625,23 +2625,28 @@ export class AurumEditor extends AurumCore {
     }
   }
 
+  private positionRefineCanvas(): void {
+    if (!this.refineOn || !this.refineCanvas) return;
+    const stageSize = this.stage.clientWidth || 1;
+    const stageH = this.stage.clientHeight || 1;
+    const rect = this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
+    this.refineCanvas.style.left = `${rect.x}px`;
+    this.refineCanvas.style.top = `${rect.y}px`;
+    this.refineCanvas.style.width = `${rect.width}px`;
+    this.refineCanvas.style.height = `${rect.height}px`;
+  }
+
   private drawRefinePreview(): void {
     if (!this.refineOn || !this.refineCanvas || !this.refineSource || !this.refineMask) return;
     const canvas = this.refineCanvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const stageSize = this.stage.clientWidth || 1;
-    const stageH = this.stage.clientHeight || 1;
     const maxSide = 1080;
     const k = Math.min(1, maxSide / Math.max(this.refineWidth, this.refineHeight));
     const w = Math.max(1, Math.round(this.refineWidth * k));
     const h = Math.max(1, Math.round(this.refineHeight * k));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-    const rect = this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
-    canvas.style.left = `${rect.x}px`;
-    canvas.style.top = `${rect.y}px`;
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
+    this.positionRefineCanvas();
     // Brush preview.
     // Retouch: direct per-pixel mix of the ORIGINAL toward a procedurally
     //   lightened version by the brushed weight. The AI engine's composite
@@ -2798,8 +2803,19 @@ export class AurumEditor extends AurumCore {
     this.refineCanvas = c;
   }
 
+  private syncToolButtons(): void {
+    this.addBtn?.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'add'));
+    this.eraseBtn?.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'erase'));
+    this.zoomBtn?.setAttribute('aria-pressed', String(this.brushZoom));
+    if (this.refineCanvas) this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
+    if (this.brushZoom) this.hideBrushRing();
+    this.updateBrushRing();
+  }
+
   private showBrush(): void {
     this.ensureRefineCanvas();
+    this.brushZoom = false;
+    this.syncToolButtons();
     this.refineCanvas.style.display = 'block';
     this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
     this.maskToolbar.style.display = 'block';
@@ -4258,7 +4274,7 @@ export class AurumEditor extends AurumCore {
       this.positionFrame(this.currentFrame());
     });
     this.on('history', () => this.syncHistory());
-    this.on('render', ({ frame }) => { this.positionFrame(frame); this.positionTexts(); });
+    this.on('render', ({ frame }) => { this.positionFrame(frame); this.positionTexts(); this.positionRefineCanvas(); });
     this.on('error', ({ error }) => this.toast(error.message || this.s.exportFailed, true));
 
     this.frameEl.addEventListener('pointerdown', this.onCropPointerDown);
