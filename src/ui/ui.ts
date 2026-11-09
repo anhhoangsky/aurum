@@ -2327,21 +2327,26 @@ export class AurumEditor extends AurumCore {
       eraseBtn.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'erase'));
       zoomBtn.setAttribute('aria-pressed', String(this.brushZoom));
       if (this.refineCanvas) this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
+      try {
+        this.gesture.setEnabled(this.brushZoom);
+      } catch {
+        // Headless/test harness without a gesture controller.
+      }
       if (this.brushZoom) this.hideBrushRing();
       this.updateBrushRing();
     };
     addBtn.addEventListener('click', () => {
-      this.brushZoom = false;
+      this.setBrushZoom(false);
       this.brushMode = 'add';
       syncToolBtns();
     });
     eraseBtn.addEventListener('click', () => {
-      this.brushZoom = false;
+      this.setBrushZoom(false);
       this.brushMode = 'erase';
       syncToolBtns();
     });
     zoomBtn.addEventListener('click', () => {
-      this.brushZoom = !this.brushZoom;
+      this.setBrushZoom(!this.brushZoom);
       syncToolBtns();
     });
     modeSeg.append(addBtn, eraseBtn, zoomBtn);
@@ -2808,8 +2813,21 @@ export class AurumEditor extends AurumCore {
     this.eraseBtn?.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'erase'));
     this.zoomBtn?.setAttribute('aria-pressed', String(this.brushZoom));
     if (this.refineCanvas) this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
+    // Gestures are disabled outside Crop (resultMode). Zoom mode re-enables
+    // pan/pinch/wheel so the user can inspect mask detail; painting disables
+    // them again so a stroke cannot drift the photo.
+    try {
+      this.gesture.setEnabled(this.brushZoom);
+    } catch {
+      // Headless/test harness without a gesture controller.
+    }
     if (this.brushZoom) this.hideBrushRing();
     this.updateBrushRing();
+  }
+
+  private setBrushZoom(on: boolean): void {
+    this.brushZoom = on;
+    this.syncToolButtons();
   }
 
   private showBrush(): void {
@@ -2929,6 +2947,8 @@ export class AurumEditor extends AurumCore {
     this.refineWhitened = null;
     this.refineMask = null;
     this.refineHistory = [];
+    this.brushZoom = false;
+    this.syncToolButtons();
     this.hideBrushRing();
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
     if (this.maskToolbar) this.maskToolbar.style.display = 'none';
@@ -4371,6 +4391,13 @@ export class AurumEditor extends AurumCore {
     const result = tab !== 'crop';
     this.setResultMode(result);
     this.root.classList.toggle('is-result', result);
+    if (this.refineOn && tab === 'ai' && this.brushZoom) {
+      try {
+        this.gesture.setEnabled(true);
+      } catch {
+        // Headless/test harness without a gesture controller.
+      }
+    }
     if (this.refineCanvas) this.refineCanvas.style.display = this.refineOn && tab === 'ai' ? 'block' : 'none';
     if (this.refineOn && tab === 'ai') this.drawRefinePreview();
     this.positionTexts();
