@@ -29,6 +29,17 @@ function setHeicNote(visible) {
   heicNote.hidden = !visible;
 }
 
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name || 'aurum.jpg';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 async function uploadEdit(blob, mode) {
   const form = new FormData();
   form.append('csrf', cfg.csrf);
@@ -46,7 +57,9 @@ async function uploadEdit(blob, mode) {
     });
   } catch (error) {
     setHeicNote(false);
-    throw new Error('Mất kết nối khi lưu ảnh. Vui lòng thử lại.');
+    console.warn('[aurum] save failed, downloading locally instead:', error);
+    downloadBlob(blob, cfg.uploadName || `${cfg.stem || 'demo'}.jpg`);
+    return;
   }
   let data = null;
   try {
@@ -56,6 +69,13 @@ async function uploadEdit(blob, mode) {
   }
   if (!response.ok || !data || data.ok !== true) {
     setHeicNote(false);
+    // GitHub Pages demo has no /api/edit backend (404/non-JSON) — download
+    // locally instead of erroring, so export still works for testing.
+    if (response.status === 404 || !data) {
+      console.warn('[aurum] no save backend, downloading locally instead');
+      downloadBlob(blob, cfg.uploadName || `${cfg.stem || 'demo'}.jpg`);
+      return;
+    }
     throw new Error((data && data.message) || 'Máy chủ không lưu được ảnh đã chỉnh sửa.');
   }
   // Return to a fresh library load so the new thumbnail and metadata are
