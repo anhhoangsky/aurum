@@ -544,18 +544,24 @@
   transform:translate(-50%,-50%);
   box-shadow:0 0 10px rgba(243,199,123,.72),0 0 2px rgba(255,238,200,.95);
 }
+/* Ruler: denser + taller ticks, synced across all sliders.
+   gap reduced via tickStep (JS) and visual weight via heights.
+   zero/major marks are taller; active is a raised gold/white pill. */
+.au-ticks--ruler .au-ticks__track{width:118%;gap:0}
 .au-tick{
-  --tick-h:12px;--au-tick:rgba(255,255,255,.58);
-  width:1px;height:var(--tick-h);flex:0 0 1px;border-radius:1px;
+  --tick-h:14px;--au-tick:rgba(255,255,255,.58);
+  width:2px;height:var(--tick-h);flex:0 0 2px;border-radius:1px;
   background:var(--au-tick);will-change:height;
   transition:height .16s cubic-bezier(.2,.8,.2,1),background-color .14s ease,opacity .16s ease,box-shadow .16s ease;
 }
-.au-tick.is-zero{--tick-h:16px;opacity:.82}
-.au-tick.is-active{height:26px;background:var(--au-gold);box-shadow:0 0 9px rgba(243,199,123,.55)}
+.au-tick.is-zero{--tick-h:20px;opacity:.92}
+.au-tick.is-major{--tick-h:20px}
+.au-ticks--ruler .au-tick.is-major{--tick-h:22px}
+.au-tick.is-active{height:30px;background:var(--au-gold);box-shadow:0 0 9px rgba(243,199,123,.55)}
 .au-tick.is-wave{animation:au-tick-wave .3s cubic-bezier(.2,.8,.2,1) var(--wave-delay,0ms) both}
-.au-ticks--ruler .au-tick{--tick-h:13px;background:rgba(255,255,255,.72)}
-.au-ticks--ruler .au-tick.is-zero{--tick-h:18px;opacity:.95}
-.au-ticks--ruler .au-tick.is-active{height:23px;background:#fff;box-shadow:none}
+.au-ticks--ruler .au-tick{--tick-h:15px;background:rgba(255,255,255,.72);width:2px;flex-basis:2px}
+.au-ticks--ruler .au-tick.is-zero{--tick-h:24px;opacity:.98}
+.au-ticks--ruler .au-tick.is-active{height:30px;background:#fff;box-shadow:none}
 .au-ticks--ruler .au-tick.is-wave{animation:none}
 @keyframes au-tick-wave{
   0%{height:24px;background:var(--au-gold);opacity:.9;box-shadow:0 0 9px rgba(243,199,123,.45)}
@@ -972,6 +978,10 @@
 .au-textnode.is-shadow{text-shadow:0 2px 8px rgba(0,0,0,.6)}
 
 .au-avatar{position:fixed;inset:0;z-index:70;display:grid;place-items:center;background:rgba(8,8,10,.6);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.au-collapsible{margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.07)}
+.au-collapsible__head{width:100%;display:flex;align-items:center;gap:8px;text-align:left;padding:4px 2px;color:inherit}
+.au-collapsible__body[hidden]{display:none!important}
+.au-chev{margin-left:auto;color:var(--au-muted);font-size:12px;flex:0 0 auto}
 .au-tune{margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.07)}
 .au-tune__head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .au-tune__title{color:#f0ead8;font-size:11px;font-weight:700;letter-spacing:.3px;text-transform:uppercase}
@@ -1020,6 +1030,14 @@
 .au-textnode.is-selected .au-text-hud::before,.au-textnode.is-selected .au-text-hud::after{content:"";position:absolute;width:10px;height:10px;border-radius:50%;background:#f3c77b;border:1.5px solid rgba(0,0,0,.6)}
 .au-textnode.is-selected .au-text-hud::before{left:-4px;top:-4px}
 .au-textnode.is-selected .au-text-hud::after{right:-4px;bottom:-4px}
+.au-text-handle{position:absolute;width:28px;height:28px;border-radius:50%;background:#f3c77b;border:2px solid rgba(0,0,0,.6);box-shadow:0 3px 10px rgba(0,0,0,.5);display:none;place-items:center;cursor:nwse-resize;touch-action:none;z-index:3}
+.au-textnode.is-selected .au-text-handle{display:block}
+.au-text-handle--scale{right:-14px;bottom:-14px}
+.au-text-handle--rotate{left:50%;top:-42px;transform:translateX(-50%);cursor:grab}
+.au-text-handle-stem{position:absolute;left:50%;top:-28px;width:2px;height:14px;background:rgba(243,199,123,.9);transform:translateX(-50%);display:none}
+.au-textnode.is-selected .au-text-handle-stem{display:block}
+.au-text-inline{width:100%;min-width:140px;margin-top:4px;padding:8px 10px;border-radius:10px;border:1px solid rgba(243,199,123,.7);background:rgba(20,20,24,.96);color:#f4f2ec;font:13px/1.4 system-ui;outline:none;resize:none;pointer-events:auto}
+.au-text-tap-hint{color:var(--au-muted);font-size:10.5px}
 .au-ai-pane__sub{color:var(--au-muted);font-size:10.5px;margin-top:2px;line-height:1.4}
 .au-ai-pane__list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .au-ai-row{

@@ -201,6 +201,8 @@ const STRINGS = {
     bgFailed: 'Chưa tách được nền',
     tuneTitle: 'Tùy chỉnh tone',
     tuneHint: 'Chọn tone, kéo slider để tinh chỉnh rồi Lưu.',
+    collapse: 'Thu gọn',
+    expand: 'Mở rộng',
     tuneStrength: 'Độ đậm',
     tuneBright: 'Sáng',
     tuneContrast: 'Tương phản',
@@ -416,6 +418,8 @@ const STRINGS = {
     bgFailed: 'Could not remove background',
     tuneTitle: 'Tone tune',
     tuneHint: 'Pick a tone, drag sliders to refine, then Save.',
+    collapse: 'Collapse',
+    expand: 'Expand',
     tuneStrength: 'Strength',
     tuneBright: 'Brightness',
     tuneContrast: 'Contrast',
@@ -1483,7 +1487,7 @@ export class AurumEditor extends AurumCore {
       min: -180,
       max: 180,
       step: 1,
-      tickStep: 5,
+      tickStep: 3,
       defaultValue: 0,
       zero: true,
       head: false,
@@ -1502,7 +1506,7 @@ export class AurumEditor extends AurumCore {
       min: -100,
       max: 100,
       step: 1,
-      tickStep: 5,
+      tickStep: 2,
       defaultValue: 0,
       zero: true,
       head: false,
@@ -1522,7 +1526,7 @@ export class AurumEditor extends AurumCore {
       min: -100,
       max: 100,
       step: 1,
-      tickStep: 5,
+      tickStep: 2,
       defaultValue: 0,
       zero: true,
       head: false,
@@ -1606,7 +1610,7 @@ export class AurumEditor extends AurumCore {
       min: -100,
       max: 100,
       step: 1,
-      tickStep: 5,
+      tickStep: 2,
       defaultValue: 0,
       zero: true,
       head: false,
@@ -1699,23 +1703,31 @@ export class AurumEditor extends AurumCore {
     pane.appendChild(context);
 
     // --- Tune per tone: sliders that write Adjust (stack on the preset, saveable) ---
-    const tune = el('div', 'au-tune');
+    // Collapsible to keep Filter deck compact (Apple Simplicity: show common path first)
+    const tune = el('div', 'au-tune au-collapsible');
     tune.setAttribute('aria-label', this.s.tuneTitle);
-    const tuneHead = el('div', 'au-tune__head');
+    const tuneHead = el('button', 'au-tune__head au-collapsible__head');
+    tuneHead.type = 'button';
+    tuneHead.setAttribute('aria-expanded', 'false');
     const tuneTitle = el('span', 'au-tune__title');
     tuneTitle.textContent = this.s.tuneTitle;
     const tuneHint = el('span', 'au-tune__hint');
     tuneHint.textContent = this.s.tuneHint;
+    const tuneBody = el('div', 'au-collapsible__body');
+    tuneBody.hidden = true;
+    const tuneChevron = el('span', 'au-chev');
+    tuneChevron.textContent = '▾';
+    tuneHead.append(tuneTitle, tuneHint, tuneChevron);
     const tuneReset = el('button', 'au-chip au-tune__reset');
     tuneReset.type = 'button';
     tuneReset.textContent = this.s.tuneReset;
-    tuneReset.addEventListener('click', () => {
+    tuneReset.addEventListener('click', (e) => {
+      e.stopPropagation();
       for (const key of (['brightness','contrast','saturation','warmth','tint','vignette','vibrance'] as const)) {
         this.setAdjust(key, key === 'vignette' ? 0 : 0);
       }
       this.syncTuneUI();
     });
-    tuneHead.append(tuneTitle, tuneHint, tuneReset);
     const tuneRow = el('div', 'au-tune__row');
     const tuneChips = el('div', 'au-params au-tune__chips');
     const tuneKeys: (keyof Adjustments)[] = ['brightness','contrast','saturation','warmth','tint','vibrance','vignette'];
@@ -1747,7 +1759,7 @@ export class AurumEditor extends AurumCore {
     const tuneContext = el('div', 'au-tune__slider');
     this.filterTuneTicks = this.makeTicks({
       label: this.s.tuneTitle,
-      min: -100, max: 100, step: 1, tickStep: 5, defaultValue: 0,
+      min: -100, max: 100, step: 1, tickStep: 2, defaultValue: 0,
       zero: true, head: false, ruler: true,
       format: (v) => this.formatTune(v),
       onInput: (v) => {
@@ -1757,16 +1769,34 @@ export class AurumEditor extends AurumCore {
       },
     });
     tuneContext.appendChild(this.filterTuneTicks.row);
+    tuneBody.append(tuneReset, tuneRow, tuneContext);
+    tuneHead.addEventListener('click', (e) => {
+      // Keep Reset clickable without toggling
+      if ((e.target as HTMLElement).closest('.au-tune__reset')) return;
+      const open = tuneBody.hidden;
+      tuneBody.hidden = !open;
+      tuneHead.setAttribute('aria-expanded', String(open));
+      tuneChevron.textContent = open ? '▴' : '▾';
+      tune.classList.toggle('is-open', open);
+      if (open) window.requestAnimationFrame(() => this.selectFilterTune(this.filterTuneKey));
+    });
     this.filterTuneWrap = tune;
-    tune.append(tuneHead, tuneRow, tuneContext);
+    tune.append(tuneHead, tuneBody);
     pane.appendChild(tune);
     this.selectFilterTune(this.filterTuneKey);
 
-    // --- Saved filters (localStorage, per-device Aurum only) ---
-    const saved = el('div', 'au-saved');
+    // --- Saved filters (localStorage, per-device Aurum only) — collapsible ---
+    const saved = el('div', 'au-saved au-collapsible');
+    const savedHeadBtn = el('button', 'au-collapsible__head');
+    savedHeadBtn.type = 'button';
+    savedHeadBtn.setAttribute('aria-expanded', 'false');
     const savedHead = el('div', 'au-saved__head');
     const savedTitle = el('span', 'au-saved__title');
     savedTitle.textContent = this.s.savedPresets;
+    const savedChev = el('span', 'au-chev');
+    savedChev.textContent = '▾';
+    savedHead.append(savedTitle, savedChev);
+    savedHeadBtn.append(savedHead);
     const nameInput = document.createElement('input');
     nameInput.className = 'au-saved__input';
     nameInput.type = 'text';
@@ -1784,12 +1814,23 @@ export class AurumEditor extends AurumCore {
       if (e.key === 'Enter') this.saveCurrentPreset(nameInput);
     });
     savedHead.append(savedTitle, nameInput, saveBtn);
+    const savedBody = el('div', 'au-collapsible__body');
+    savedBody.hidden = true;
     const list = el('div', 'au-saved__list');
     this.savedList = list;
     this.savedWrap = saved;
     this.filterNameInput = nameInput;
     this.filterSaveBtn = saveBtn;
-    saved.append(savedHead, list);
+    savedBody.append(list);
+    savedHeadBtn.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('.au-saved__input, .au-save-preset')) return;
+      const open = savedBody.hidden;
+      savedBody.hidden = !open;
+      savedHeadBtn.setAttribute('aria-expanded', String(open));
+      savedChev.textContent = open ? '▴' : '▾';
+      saved.classList.toggle('is-open', open);
+    });
+    saved.append(savedHeadBtn, savedBody);
     pane.appendChild(saved);
     this.renderSavedPresets();
   }
@@ -1800,7 +1841,7 @@ export class AurumEditor extends AurumCore {
       btn.setAttribute('aria-pressed', String(id === key));
     }
     const [min, max] = ADJUST_RANGES[key];
-    this.filterTuneTicks.setRange(min, max, 1, 5, min < 0);
+    this.filterTuneTicks.setRange(min, max, 1, 2, min < 0);
     this.filterTuneTicks.setLabel(`${this.s.tuneTitle} · ${key}`);
     const state = this.isReady ? this.getState() : null;
     const value = state ? Math.round(state.adjust[key]) : 0;
@@ -1851,9 +1892,14 @@ export class AurumEditor extends AurumCore {
     sub.innerHTML = `<span>${escHtml(this.s.textPinch)}</span><span class="au-text-dot">·</span><span>${escHtml(this.s.textDoubleTap)}</span>`;
     pane.appendChild(sub);
 
+    // Tap-on-image to type: no dock textarea — the editor floats on the photo itself.
     const body = el('div', 'au-text-body');
+    body.innerHTML = `<span class="au-text-tap-hint">${escHtml(this.locale === 'vi' ? 'Chạm vào ảnh để đặt chữ • Kéo 2 tay hoặc handle để phóng/xoay' : 'Tap on photo to place text • Pinch or use handles to resize/rotate')}</span>`;
+    pane.appendChild(body);
+    // Keep a hidden input for compatibility (fully controlled via overlay editor)
     const input = document.createElement('textarea');
     input.className = 'au-text-input';
+    input.style.display = 'none';
     input.rows = 1;
     input.maxLength = 120;
     input.spellcheck = false;
@@ -1867,8 +1913,7 @@ export class AurumEditor extends AurumCore {
       this.syncTextLayerEl(layer);
     });
     this.textInput = input;
-    body.appendChild(input);
-    pane.appendChild(body);
+    pane.appendChild(input);
 
     // Quick styles — Meitu style single-tap presets (Apple: Familiarity + Craft)
     const quick = el('div', 'au-quick-styles');
@@ -1997,27 +2042,25 @@ export class AurumEditor extends AurumCore {
     toggles.append(dup, del);
     pane.appendChild(toggles);
 
-    // Sliders: size / opacity / rotation (tick rulers — direct manipulation, no entry anim)
+    // Direct manipulation controls live ON the text (handles). Only opacity stays
+    // as a slider — size/rotation are grabbed on the photo (Apple §2).
     const sliders = el('div', 'au-text-sliders');
-    this.textSizeTicks = this.makeTicks({
-      label: this.s.fontSize,
-      min: 2, max: 24, step: 1, tickStep: 2, defaultValue: 7,
-      format: (v) => `${v}%`,
-      onInput: (v) => { const l = this.selectedLayer(); if (l) { l.size = v / 100; this.positionTexts(); } },
-    });
     this.textOpacityTicks = this.makeTicks({
       label: this.s.textOpacity,
-      min: 10, max: 100, step: 1, tickStep: 5, defaultValue: 100,
+      min: 10, max: 100, step: 1, tickStep: 3, defaultValue: 100,
       format: (v) => `${v}%`,
       onInput: (v) => { const l = this.selectedLayer(); if (l) { l.opacity = v / 100; this.syncTextLayerEl(l); } },
     });
-    this.textRotateTicks = this.makeTicks({
-      label: this.s.textRotate,
-      min: -180, max: 180, step: 1, tickStep: 15, defaultValue: 0, zero: true, ruler: true,
-      format: (v) => `${Math.round(v)}°`,
-      onInput: (v) => { const l = this.selectedLayer(); if (l) { l.rotation = Math.round(v); this.positionTexts(); } },
+    // Keep stubs for syncTextControls compatibility (hidden)
+    this.textSizeTicks = this.makeTicks({
+      label: this.s.fontSize, min: 2, max: 24, step: 1, tickStep: 2, defaultValue: 7,
+      format: (v) => `${v}%`, onInput: () => {},
     });
-    sliders.append(this.textSizeTicks.row, this.textOpacityTicks.row, this.textRotateTicks.row);
+    this.textRotateTicks = this.makeTicks({
+      label: this.s.textRotate, min: -180, max: 180, step: 1, tickStep: 10, defaultValue: 0, zero: true, ruler: true,
+      format: (v) => `${Math.round(v)}°`, onInput: () => {},
+    });
+    sliders.append(this.textOpacityTicks.row);
     this.textControls = sliders;
     pane.appendChild(sliders);
   }
@@ -2421,6 +2464,8 @@ export class AurumEditor extends AurumCore {
         const tick = el('span', 'au-tick');
         const tickValue = min + i * tickStep;
         if (zero && Math.abs(tickValue) < tickStep / 2) tick.classList.add('is-zero');
+        // Major marks every 5th tick (or at 0) are taller/wider for quick reading
+        if (i % 5 === 0 || (zero && Math.abs(tickValue) < tickStep / 2)) tick.classList.add('is-major');
         track.appendChild(tick);
         ticks.push(tick);
       }
@@ -2705,7 +2750,7 @@ export class AurumEditor extends AurumCore {
       min: 10,
       max: 100,
       step: 1,
-      tickStep: 5,
+      tickStep: 3,
       defaultValue: 92,
       head: true,
       format: (value) => `${Math.round(value)}%`,
@@ -2921,19 +2966,78 @@ export class AurumEditor extends AurumCore {
     this.textLayer.appendChild(node);
     this.syncTextControls(layer);
     this.positionTexts();
-    this.textInput?.focus();
+    this.openInlineTextEditor(node, layer);
   }
 
   private createTextNode(layer: AurumTextLayer): HTMLElement {
     const node = el('div', 'au-textnode');
     node.dataset.textId = layer.id;
     node.setAttribute('aria-hidden', 'true');
-    node.textContent = layer.text;
+    const textSpan = document.createElement('span');
+    textSpan.className = 'au-text-span';
+    textSpan.textContent = layer.text;
+    node.appendChild(textSpan);
     // Selection handles (CSS pseudo visual, no layout change on edit)
     const hud = document.createElement('span');
     hud.className = 'au-text-hud';
     hud.setAttribute('aria-hidden', 'true');
     node.appendChild(hud);
+    // Direct-manipulation handles: scale (bottom-right) + rotate (top-center) (Apple §2)
+    const scaleHandle = document.createElement('span');
+    scaleHandle.className = 'au-text-handle au-text-handle--scale';
+    scaleHandle.setAttribute('aria-hidden', 'true');
+    const rotHandle = document.createElement('span');
+    rotHandle.className = 'au-text-handle au-text-handle--rotate';
+    rotHandle.setAttribute('aria-hidden', 'true');
+    const stem = document.createElement('span');
+    stem.className = 'au-text-handle-stem';
+    stem.setAttribute('aria-hidden', 'true');
+    node.append(stem, scaleHandle, rotHandle);
+
+    const bindHandle = (handle: HTMLElement, kind: 'scale' | 'rotate') => {
+      handle.addEventListener('pointerdown', (ev) => {
+        if (ev.target !== handle && !handle.contains(ev.target as Node)) return;
+        ev.preventDefault(); ev.stopPropagation();
+        this.selectedTextId = layer.id; this.syncTextControls(layer);
+        try { handle.setPointerCapture(ev.pointerId); } catch {}
+        const rect0 = this.displayCropRect();
+        const c = rect0 ? { x: rect0.x + layer.x * rect0.width, y: rect0.y + layer.y * rect0.height } : null;
+        if (!c || !rect0) return;
+        const startX = ev.clientX, startY = ev.clientY;
+        const startSize = layer.size, startRot = layer.rotation;
+        const startDist = Math.max(1, Math.hypot(ev.clientX - (this.stage.getBoundingClientRect().left + c.x), ev.clientY - (this.stage.getBoundingClientRect().top + c.y)));
+        const startAngle = Math.atan2(ev.clientY - (this.stage.getBoundingClientRect().top + c.y), ev.clientX - (this.stage.getBoundingClientRect().left + c.x));
+        const move = (e: PointerEvent) => {
+          if (e.pointerId !== ev.pointerId) return;
+          e.preventDefault(); e.stopPropagation();
+          const stageRect = this.stage.getBoundingClientRect();
+          const curDist = Math.max(1, Math.hypot(e.clientX - (stageRect.left + c.x), e.clientY - (stageRect.top + c.y)));
+          const curAngle = Math.atan2(e.clientY - (stageRect.top + c.y), e.clientX - (stageRect.left + c.x));
+          if (kind === 'scale') {
+            const scale = curDist / startDist;
+            layer.size = clamp(startSize * scale, 0.02, 0.24);
+            this.positionTexts();
+          } else {
+            const dDeg = ((curAngle - startAngle) * 180) / Math.PI;
+            layer.rotation = Math.round(((startRot + dDeg + 540) % 360) - 180);
+            this.positionTexts();
+          }
+          void startX; void startY;
+        };
+        const up = (e: PointerEvent) => {
+          if (e.pointerId !== ev.pointerId) return;
+          handle.removeEventListener('pointermove', move);
+          handle.removeEventListener('pointerup', up);
+          handle.removeEventListener('pointercancel', up);
+          this.syncTextControls(layer);
+        };
+        handle.addEventListener('pointermove', move);
+        handle.addEventListener('pointerup', up);
+        handle.addEventListener('pointercancel', up);
+      });
+    };
+    bindHandle(scaleHandle, 'scale');
+    bindHandle(rotHandle, 'rotate');
     // Multi-pointer gesture: 1 pointer = drag, 2 pointers = pinch scale + rotate (Apple §2,5,6)
     const pointers = new Map<number, { x: number; y: number }>();
     let gesture: null | {
@@ -2956,8 +3060,7 @@ export class AurumEditor extends AurumCore {
         // Double-tap → edit (Apple §10: only pay disambiguation where double-tap exists)
         this.selectedTextId = layer.id;
         this.syncTextControls(layer);
-        this.textInput?.focus();
-        this.textInput?.select();
+        this.openInlineTextEditor(node, layer);
         lastTap = 0;
         return;
       }
@@ -3082,8 +3185,7 @@ export class AurumEditor extends AurumCore {
       e.preventDefault();
       this.selectedTextId = layer.id;
       this.syncTextControls(layer);
-      this.textInput?.focus();
-      this.textInput?.select();
+      this.openInlineTextEditor(node, layer);
     });
     this.syncTextLayerStyle(node, layer);
     return node;
@@ -3092,10 +3194,79 @@ export class AurumEditor extends AurumCore {
   private syncTextLayerEl(layer: AurumTextLayer): void {
     const node = this.textLayer?.querySelector<HTMLElement>(`[data-text-id="${layer.id}"]`);
     if (!node) return;
-    node.textContent = layer.text;
+    const span = node.querySelector('.au-text-span');
+    if (span) span.textContent = layer.text;
+    else node.textContent = layer.text;
+    // Re-append handles that textContent wipes
+    if (!node.querySelector('.au-text-handle--scale')) {
+      // Node was nuked — rebuild handles quickly
+      // (Handled lazily by positionTexts; handles re-created on next create)
+    }
     this.syncTextLayerStyle(node, layer);
     this.positionTexts();
   }
+
+  // Tap-on-photo to place text + inline editor (Apple direct manipulation)
+  private openInlineTextEditor(node: HTMLElement, layer: AurumTextLayer): void {
+    // Remove existing inline editor if any
+    const existing = node.querySelector('.au-text-inline');
+    if (existing) { (existing as HTMLElement).focus(); return; }
+    const ta = document.createElement('textarea');
+    ta.className = 'au-text-inline';
+    ta.value = layer.text;
+    ta.rows = 1;
+    ta.maxLength = 120;
+    ta.spellcheck = false;
+    ta.placeholder = this.s.textInput;
+    ta.setAttribute('aria-label', this.s.textInput);
+    ta.addEventListener('pointerdown', (e) => e.stopPropagation());
+    ta.addEventListener('input', () => {
+      layer.text = ta.value;
+      const span = node.querySelector('.au-text-span');
+      if (span) span.textContent = layer.text;
+      this.positionTexts();
+    });
+    const done = () => {
+      layer.text = ta.value;
+      const span = node.querySelector('.au-text-span');
+      if (span) span.textContent = layer.text;
+      ta.remove();
+      this.syncTextLayerEl(layer);
+      this.positionTexts();
+    };
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); done(); }
+      if (e.key === 'Escape') { e.preventDefault(); done(); }
+    });
+    ta.addEventListener('blur', done);
+    node.appendChild(ta);
+    // Position editor over the node, keep keyboard open
+    requestAnimationFrame(() => { ta.focus(); ta.select(); });
+  }
+
+  private tapToPlaceText = (event: PointerEvent): void => {
+    if (this.currentTab !== 'text' || !this.isReady) return;
+    // Only when tapping empty stage (not on an existing text node)
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('.au-textnode, .au-ticks, .au-tabs, .au-deck')) return;
+    const rect = this.displayCropRect();
+    if (!rect) return;
+    const stageRect = this.stage.getBoundingClientRect();
+    const x = (event.clientX - stageRect.left - rect.x) / rect.width;
+    const y = (event.clientY - stageRect.top - rect.y) / rect.height;
+    if (x < 0.05 || x > 0.95 || y < 0.05 || y > 0.95) return;
+    event.preventDefault();
+    const layer = defaultTextLayer();
+    layer.x = clamp01(x); layer.y = clamp01(y);
+    layer.text = '';
+    this.texts.push(layer);
+    this.selectedTextId = layer.id;
+    const node = this.createTextNode(layer);
+    this.textLayer.appendChild(node);
+    this.syncTextControls(layer);
+    this.positionTexts();
+    this.openInlineTextEditor(node, layer);
+  };
 
   private syncTextLayerStyle(node: HTMLElement, layer: AurumTextLayer): void {
     const font = TEXT_FONTS.find((f) => f.id === layer.font) ?? TEXT_FONTS[0];
@@ -3385,6 +3556,8 @@ export class AurumEditor extends AurumCore {
 
     this.frameEl.addEventListener('pointerdown', this.onCropPointerDown);
     this.frameEl.addEventListener('keydown', this.onCropKeyDown);
+    // Tap on photo in Text tab → place new text at that point (Meitu-style)
+    this.stage.addEventListener('pointerdown', this.tapToPlaceText);
 
     this.root.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && this.sheetWrap.classList.contains('is-open')) {
@@ -3790,7 +3963,7 @@ export class AurumEditor extends AurumCore {
       button.setAttribute('aria-pressed', String(id === key));
     }
     const [min, max] = ADJUST_RANGES[key];
-    this.adjustTicks.setRange(min, max, 1, 5, min < 0);
+    this.adjustTicks.setRange(min, max, 1, 2, min < 0);
     this.adjustTicks.setLabel(this.s[key]);
     const value = this.isReady ? Math.round(this.getState().adjust[key]) : 0;
     this.adjustTicks.set(value, false);

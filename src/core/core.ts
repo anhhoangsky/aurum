@@ -1444,14 +1444,76 @@ export class AurumCore {
     this.commit('reset');
   }
 
+  private applyHistoryState(next: EditorState): void {
+    // Fix: undo/redo must not "phóng ảnh" (jump-zoom). ensureCoverage() recomputes
+    // the minimum zoom for the *current* viewport/frame and clamps the restored
+    // zoom UP to that minimum. When the dock changed height or the undo was only
+    // a colour/filter change, this raises zoom unexpectedly.
+    // Strategy: if the restored geometry (rotation, flip, perspective, crop) is
+    // unchanged, keep the live zoom/offset — only colour/enhance are reverted.
+    // If geometry did change, restore zoom exactly and only clamp offset.
+    const prev = this.state;
+    const geomSame =
+      prev.transform.turn === next.transform.turn &&
+      prev.transform.rotation === next.transform.rotation &&
+      prev.transform.flipH === next.transform.flipH &&
+      prev.transform.flipV === next.transform.flipV &&
+      prev.transform.perspectiveX === next.transform.perspectiveX &&
+      prev.transform.perspectiveY === next.transform.perspectiveY &&
+      prev.crop.aspect === next.crop.aspect &&
+      prev.crop.ratio === next.crop.ratio &&
+      prev.crop.scale === next.crop.scale &&
+      Math.abs(prev.transform.zoom - next.transform.zoom) < 0.0001 &&
+      Math.abs(prev.transform.offsetX - next.transform.offsetX) < 0.0001 &&
+      Math.abs(prev.transform.offsetY - next.transform.offsetY) < 0.0001;
+    this.state = next;
+    if (geomSame) {
+      // Keep live framing; do not re-clamp zoom to a new minimum.
+      this.state.transform.zoom = prev.transform.zoom;
+      this.state.transform.offsetX = prev.transform.offsetX;
+      this.state.transform.offsetY = prev.transform.offsetY;
+    } else {
+      // Geometry changed: restore exact zoom/offset, clamp offset only (no min-zoom jump).
+      this.state.transform.zoom = clamp(next.transform.zoom, 0.2, this.maxZoom);
+      if (this.ready) {
+        const viewport = this.viewport();
+        if (viewport.width >= 8 && viewport.height >= 8) {
+          const size = this.source();
+          const frame = frameRect(viewport, this.state.crop);
+          const clamped = clampOffset(viewport, size.width, size.height, this.state.transform, frame);
+          this.state.transform.offsetX = clamped.x;
+          this.state.transform.offsetY = clamped.y;
+        }
+      }
+    }
+    // Ensure state validity but never raise zoom to fit on history navigation.
+    if (this.ready) {
+      const viewport = this.viewport();
+      if (viewport.width < 8 || viewport.height < 8) return;
+      const size = this.source();
+      if (size.width < 2 || size.height < 2) return;
+      const frame = frameRect(viewport, this.state.crop);
+      // If the restored framing truly can't cover the frame (e.g. after crop
+      // ratio undo), fall back to covering fit — only then is a zoom-up correct.
+      const min = minimumZoomForTransform(viewport, size.width, size.height, this.state.transform, frame);
+      if (this.state.transform.zoom < min - 0.001) {
+        // Keep close to restored zoom but guarantee coverage.
+        this.state.transform.zoom = clamp(min, 0.2, this.maxZoom);
+        const clamped = clampOffset(viewport, size.width, size.height, this.state.transform, frame);
+        this.state.transform.offsetX = clamped.x;
+        this.state.transform.offsetY = clamped.y;
+      }
+      this.lastViewport = viewport;
+    }
+  }
+
   undo(): boolean {
     // AI is not a slider edit, so the first undo after a pass reverts the base
     // image. Later edits still undo normally inside the new history.
     if (this.aiBefore && !this.history.canUndo) return this.revertAI();
     const state = this.history.undo();
     if (!state) return false;
-    this.state = state;
-    this.ensureCoverage();
+    this.applyHistoryState(state);
     this.scheduleRender();
     this.emitState();
     this.emitHistory();
@@ -1461,8 +1523,7 @@ export class AurumCore {
   redo(): boolean {
     const state = this.history.redo();
     if (!state) return false;
-    this.state = state;
-    this.ensureCoverage();
+    this.applyHistoryState(state);
     this.scheduleRender();
     this.emitState();
     this.emitHistory();
