@@ -29,6 +29,7 @@ const STRINGS = {
     save: 'Lưu',
     cancel: 'Hủy',
     cancelled: 'Đã hủy thay đổi',
+    holdOriginal: 'Nguyên bản',
     emptyTitle: 'Chỉnh ảnh của bạn',
     emptyHint: 'Kéo ảnh vào đây hoặc chọn từ thiết bị. Hỗ trợ JPEG, PNG, WebP.',
     openImage: 'Mở ảnh',
@@ -263,6 +264,7 @@ const STRINGS = {
     save: 'Save',
     cancel: 'Cancel',
     cancelled: 'Changes discarded',
+    holdOriginal: 'Original',
     emptyTitle: 'Edit your photo',
     emptyHint: 'Drop an image here or choose one from your device. JPEG, PNG and WebP are supported.',
     openImage: 'Open image',
@@ -934,6 +936,9 @@ export class AurumEditor extends AurumCore {
   private aiCompareBar: HTMLElement | null = null;
   private aiCompareHold: HTMLButtonElement | null = null;
   private aiCompareOn = false;
+  private peekBtn: HTMLButtonElement | null = null;
+  private peekCanvas: HTMLCanvasElement | null = null;
+  private peekOn = false;
   private paramsEl!: HTMLElement;
   private filterWrap!: HTMLElement;
   private filterCats!: HTMLElement;
@@ -1350,6 +1355,43 @@ export class AurumEditor extends AurumCore {
       aiGroup.appendChild(aiBtn);
       toolsRow.appendChild(aiGroup);
     }
+
+    // Hold to preview the untouched original (raw bitmap overlay, no filter).
+    const peekGroup = el('div', 'au-top__group');
+    const peekBtn = el('button', 'au-top__ai au-glass au-peek');
+    peekBtn.type = 'button';
+    peekBtn.title = this.s.holdOriginal;
+    peekBtn.setAttribute('aria-label', this.s.holdOriginal);
+    peekBtn.setAttribute('aria-pressed', 'false');
+    peekBtn.innerHTML = `${icon('layers')}<span></span>`;
+    const peekLabel = peekBtn.querySelector('span');
+    if (peekLabel) peekLabel.textContent = this.s.holdOriginal;
+    const setPeek = (on: boolean): void => this.setPeekOriginal(on);
+    const endPeek = (): void => setPeek(false);
+    peekBtn.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      try {
+        peekBtn.setPointerCapture(event.pointerId);
+      } catch {
+        // Pointer already gone; still peek.
+      }
+      setPeek(true);
+      event.preventDefault();
+    });
+    peekBtn.addEventListener('pointerup', endPeek);
+    peekBtn.addEventListener('pointercancel', endPeek);
+    peekBtn.addEventListener('keydown', (event) => {
+      if (event.key !== ' ' && event.key !== 'Enter') return;
+      event.preventDefault();
+      if (!event.repeat) setPeek(true);
+    });
+    peekBtn.addEventListener('keyup', (event) => {
+      if (event.key === ' ' || event.key === 'Enter') setPeek(false);
+    });
+    peekBtn.addEventListener('contextmenu', (event) => event.preventDefault());
+    this.peekBtn = peekBtn;
+    peekGroup.appendChild(peekBtn);
+    toolsRow.appendChild(peekGroup);
 
     header.append(primary, toolsRow);
     this.root.insertBefore(header, this.work);
@@ -3552,6 +3594,45 @@ export class AurumEditor extends AurumCore {
   }
 
   /** Rectangle of the displayed crop (result view), in stage CSS pixels. */
+  private setPeekOriginal(on: boolean): void {
+    if (this.peekOn === on) return;
+    this.peekOn = on;
+    this.peekBtn?.classList.toggle('is-on', on);
+    this.peekBtn?.setAttribute('aria-pressed', String(on));
+    if (!on) {
+      if (this.peekCanvas) this.peekCanvas.style.display = 'none';
+      return;
+    }
+    if (!this.isReady) return;
+    const source = this.sourceBitmap();
+    if (!source) return;
+    const size = this.source();
+    const stageSize = this.stage.clientWidth || 1;
+    const stageH = this.stage.clientHeight || 1;
+    if (!this.peekCanvas) {
+      const c = document.createElement('canvas');
+      c.className = 'au-peekprev';
+      c.setAttribute('aria-hidden', 'true');
+      this.stage.appendChild(c);
+      this.peekCanvas = c;
+    }
+    const canvas = this.peekCanvas;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const maxSide = 1600;
+    const k = Math.min(1, maxSide / Math.max(1, size.width, size.height));
+    const w = Math.max(1, Math.round(size.width * k));
+    const h = Math.max(1, Math.round(size.height * k));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const rect = this.displayCropRect() ?? { x: 0, y: 0, width: stageSize, height: stageH };
+    canvas.style.left = `${rect.x}px`;
+    canvas.style.top = `${rect.y}px`;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    ctx.drawImage(source, 0, 0, size.width, size.height, 0, 0, w, h);
+    canvas.style.display = 'block';
+  }
+
   private displayCropRect(): { x: number; y: number; width: number; height: number } | null {
     if (!this.isReady) return null;
     const viewport = this.viewport();
