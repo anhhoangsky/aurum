@@ -1042,6 +1042,7 @@ export class AurumEditor extends AurumCore {
   private brushSize = 7;
   private brushRingEl: HTMLElement | null = null;
   private brushPointer: { x: number; y: number } | null = null;
+  private brushPreview = false;
   private zoomBtn: HTMLButtonElement | null = null;
   private zoomInBtn: HTMLButtonElement | null = null;
   private zoomOutBtn: HTMLButtonElement | null = null;
@@ -2783,7 +2784,7 @@ export class AurumEditor extends AurumCore {
 
   private updateBrushRing(): void {
     if (!this.brushRingEl) return;
-    if (!this.refineOn || this.brushZoom || !this.brushPointer || !this.refineCanvas) {
+    if (!this.refineOn || (!this.brushPreview && this.brushZoom) || !this.brushPointer || !this.refineCanvas) {
       this.brushRingEl.style.display = 'none';
       return;
     }
@@ -2803,15 +2804,18 @@ export class AurumEditor extends AurumCore {
 
   private hideBrushRing(): void {
     this.brushPointer = null;
+    this.brushPreview = false;
     if (this.brushRingEl) this.brushRingEl.style.display = 'none';
   }
 
-  /** Preview the current brush size at the photo centre while the size slider moves. */
+  /** Preview the current brush size at the stage centre (viewport) while the
+   *  size slider moves — always visible even when the photo is zoomed/panned. */
   private showCenterBrushRing(): void {
-    if (!this.refineOn || this.brushZoom) return;
-    const rect = this.imageDisplayRect() ?? this.displayCropRect();
-    if (!rect) return;
-    this.brushPointer = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    if (!this.refineOn) return;
+    const w = this.stage.clientWidth || 1;
+    const h = this.stage.clientHeight || 1;
+    this.brushPointer = { x: w / 2, y: h / 2 };
+    this.brushPreview = true;
     this.updateBrushRing();
   }
 
