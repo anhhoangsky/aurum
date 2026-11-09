@@ -242,6 +242,7 @@ const STRINGS = {
     textAlignLeft: 'Trái',
     textAlignCenter: 'Giữa',
     textAlignRight: 'Phải',
+    textShowFrame: 'Khung chữ',
   },
   en: {
     title: 'Edit photo',
@@ -463,6 +464,7 @@ const STRINGS = {
     textAlignLeft: 'Left',
     textAlignCenter: 'Center',
     textAlignRight: 'Right',
+    textShowFrame: 'Frame',
   },
 } as const;
 
@@ -917,6 +919,9 @@ export class AurumEditor extends AurumCore {
   })();
   private bgModelButtons = new Map<AiModelId, HTMLButtonElement>();
   private bgModelDetail!: HTMLElement;
+  private bgModelLabelEl!: HTMLElement;
+  private bgModelSegEl!: HTMLElement;
+  private bgListEl!: HTMLElement;
   // Mask brush refine state
   private refineCanvas!: HTMLCanvasElement;
   private refineOn = false;
@@ -940,6 +945,7 @@ export class AurumEditor extends AurumCore {
   private selectedTextId: string | null = null;
   private textPlacing = false;
   private textPlaceBtn!: HTMLButtonElement;
+  private textShowFrame = (() => { try { return localStorage.getItem('aurum:text-frame') !== '0'; } catch { return true; } })();
   private textInput!: HTMLTextAreaElement;
   private textSizeTicks!: TickControl;
   private textOpacityTicks!: TickControl;
@@ -2012,6 +2018,17 @@ export class AurumEditor extends AurumCore {
     mkToggle(this.s.italic, () => this.selectedLayer()?.italic ?? false, (v) => { const l = this.selectedLayer(); if (l) l.italic = v; });
     mkToggle(this.s.outline, () => this.selectedLayer()?.outline ?? false, (v) => { const l = this.selectedLayer(); if (l) l.outline = v; });
     mkToggle(this.s.shadow, () => this.selectedLayer()?.shadow ?? true, (v) => { const l = this.selectedLayer(); if (l) l.shadow = v; });
+    mkToggle(this.s.textShowFrame, () => this.textShowFrame, (v) => {
+      this.textShowFrame = v;
+      try { localStorage.setItem('aurum:text-frame', v ? '1' : '0'); } catch {}
+      const layer = this.selectedLayer();
+      if (layer) this.syncTextLayerEl(layer);
+      // refresh all nodes
+      for (const n of Array.from(this.textLayer.querySelectorAll<HTMLElement>('.au-textnode'))) {
+        const l = this.texts.find((t) => t.id === n.dataset.textId);
+        if (l) this.syncTextLayerStyle(n, l);
+      }
+    });
     const dup = el('button', 'au-chip');
     dup.type = 'button';
     dup.innerHTML = `${icon('duplicate')}<span>${this.s.duplicateText}</span>`;
@@ -2054,8 +2071,10 @@ export class AurumEditor extends AurumCore {
     // Model picker — ISNet default (user choice: quality)
     const modelLabel = el('div', 'au-model-label');
     modelLabel.textContent = this.s.modelLabel;
+    this.bgModelLabelEl = modelLabel;
     pane.appendChild(modelLabel);
     const seg = el('div', 'au-seg au-model-seg');
+    this.bgModelSegEl = seg;
     seg.setAttribute('role', 'group');
     const models: { id: AiModelId; label: keyof UIStrings; detail: keyof UIStrings; recommended?: boolean }[] = [
       { id: 'isnet-fp16', label: 'modelQuality', detail: 'modelDetailQuality', recommended: true },
@@ -2096,6 +2115,7 @@ export class AurumEditor extends AurumCore {
     pane.appendChild(this.bgModelDetail);
 
     const list = el('div', 'au-ai-pane__list au-ai-pane__list--row');
+    this.bgListEl = list;
     const mkBtn = (mode: BackgroundMode, label: string, icn: IconName, primary = false) => {
       const row = el('button', `au-ai-pill ${primary ? 'is-primary' : ''}`);
       row.type = 'button';
@@ -2106,7 +2126,7 @@ export class AurumEditor extends AurumCore {
     };
     mkBtn('remove', this.s.bgRemoveShort, 'eraser', true);
     mkBtn('person', this.s.bgPersonShort, 'bg');
-    mkBtn('blur', this.s.bgBlurShort, 'contrast');
+    mkBtn('blur', this.s.bgBlurShort, 'filter');
     mkBtn('replace', this.s.bgReplaceShort, 'image');
     if (!this.backgroundAction) {
       const note = el('div', 'au-ai-pane__note');
@@ -2227,16 +2247,49 @@ export class AurumEditor extends AurumCore {
     canvas.style.top = `${rect.y}px`;
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
-    // checker background (8px cells)
-    const cell = Math.max(4, Math.round(w / 24));
-    for (let y = 0; y < h; y += cell) {
-      for (let x = 0; x < w; x += cell) {
-        ctx.fillStyle = (Math.floor(x / cell) + Math.floor(y / cell)) % 2 === 0 ? '#3a3a3f' : '#232327';
-        ctx.fillRect(x, y, cell, cell);
+    // checker background (8px cells) — for blur/replace preview uses actual bg
+    if (this.refineMode === 'replace') {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+    } else if (this.refineMode === 'blur') {
+      // Blurred background preview (downscale trick, same as engine blur)
+      const small = document.createElement('canvas');
+      const sw = Math.max(1, w >> 3), sh = Math.max(1, h >> 3);
+      small.width = sw; small.height = sh;
+      const sctx = small.getContext('2d');
+      if (sctx) {
+        sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
+        sctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, sw, sh);
+        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(small, 0, 0, w, h);
+      }
+    } else {
+      const cell = Math.max(4, Math.round(w / 24));
+      for (let y = 0; y < h; y += cell) {
+        for (let x = 0; x < w; x += cell) {
+          ctx.fillStyle = (Math.floor(x / cell) + Math.floor(y / cell)) % 2 === 0 ? '#3a3a3f' : '#232327';
+          ctx.fillRect(x, y, cell, cell);
+        }
       }
     }
     // downscaled mask for preview
     const pm = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, w, h);
+    if (this.refineMode === 'replace' || this.refineMode === 'blur') {
+      // Composite: bg already drawn, overlay fg with alpha mask
+      const fg = document.createElement('canvas');
+      fg.width = w; fg.height = h;
+      const fctx = fg.getContext('2d');
+      if (!fctx) return;
+      fctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
+      const fgImg = fctx.getImageData(0, 0, w, h);
+      const fd = fgImg.data;
+      for (let i = 0, j = 0; i < pm.length; i++, j += 4) {
+        fd[j + 3] = Math.round(Math.min(1, Math.max(0, pm[i] ?? 0)) * 255);
+      }
+      fctx.putImageData(fgImg, 0, 0);
+      ctx.drawImage(fg, 0, 0);
+      return;
+    }
     ctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, w, h);
     const img = ctx.getImageData(0, 0, w, h);
     const d = img.data;
@@ -2286,6 +2339,10 @@ export class AurumEditor extends AurumCore {
     }
     this.refineCanvas.style.display = 'block';
     this.maskToolbar.style.display = 'block';
+    // Hide model + action list while refining (dock becomes mask tools only)
+    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
+      if (el) el.style.display = 'none';
+    }
     this.positionTexts();
     this.drawRefinePreview();
     this.showTab('ai');
@@ -2318,6 +2375,9 @@ export class AurumEditor extends AurumCore {
     this.refineHistory = [];
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
     if (this.maskToolbar) this.maskToolbar.style.display = 'none';
+    for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
+      if (el) el.style.display = '';
+    }
     this.positionTexts();
   }
 
@@ -2329,13 +2389,34 @@ export class AurumEditor extends AurumCore {
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.drawImage(this.refineSource, 0, 0);
-    const img = ctx.getImageData(0, 0, w, h);
+    // Build background
+    if (this.refineMode === 'replace') {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+    } else if (this.refineMode === 'blur') {
+      const small = document.createElement('canvas');
+      small.width = Math.max(1, w >> 3); small.height = Math.max(1, h >> 3);
+      const sctx = small.getContext('2d');
+      if (sctx) {
+        sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
+        sctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight, 0, 0, small.width, small.height);
+        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(small, 0, 0, w, h);
+      }
+    }
+    // Foreground with mask
+    const fg = document.createElement('canvas');
+    fg.width = w; fg.height = h;
+    const fctx = fg.getContext('2d');
+    if (!fctx) return;
+    fctx.drawImage(this.refineSource, 0, 0);
+    const img = fctx.getImageData(0, 0, w, h);
     const d = img.data;
     for (let i = 0, j = 0; i < fullMask.length; i++, j += 4) {
       d[j + 3] = Math.round(Math.min(1, Math.max(0, fullMask[i] ?? 0)) * 255);
     }
-    ctx.putImageData(img, 0, 0);
+    fctx.putImageData(img, 0, 0);
+    ctx.drawImage(fg, 0, 0);
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
     if (!blob) {
       this.toast(this.s.bgFailed, true);
@@ -3217,10 +3298,17 @@ export class AurumEditor extends AurumCore {
 
   private tapToPlaceText = (event: PointerEvent): void => {
     if (this.currentTab !== 'text' || !this.isReady) return;
-    if (!this.textPlacing) return;
-    // Only when tapping empty stage (not on an existing text node)
+    // Tap outside text (and not placing) deselects — frame hides unless "Khung chữ" is on
     const target = event.target as HTMLElement | null;
     if (target?.closest('.au-textnode, .au-ticks, .au-tabs, .au-deck')) return;
+    if (!this.textPlacing) {
+      this.selectedTextId = null;
+      for (const n of Array.from(this.textLayer.querySelectorAll<HTMLElement>('.au-textnode'))) {
+        const l = this.texts.find((t) => t.id === n.dataset.textId);
+        if (l) this.syncTextLayerStyle(n, l);
+      }
+      return;
+    }
     const rect = this.displayCropRect();
     if (!rect) return;
     const stageRect = this.stage.getBoundingClientRect();
@@ -3259,6 +3347,7 @@ export class AurumEditor extends AurumCore {
     node.classList.toggle('is-selected', layer.id === this.selectedTextId);
     node.classList.toggle('is-outline', layer.outline);
     node.classList.toggle('is-shadow', layer.shadow && !layer.outline);
+    node.classList.toggle('show-frame', this.textShowFrame);
   }
 
   private syncTextControls(layer: AurumTextLayer): void {

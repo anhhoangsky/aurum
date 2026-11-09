@@ -1030,6 +1030,7 @@
 .au-text-arrange{display:flex;align-items:center;gap:8px;margin-top:4px}
 .au-align-seg{grid-template-columns:repeat(3,1fr)!important;flex:1 1 auto;margin:0}
 .au-textnode .au-text-hud{position:absolute;inset:-6px;border:1px dashed rgba(243,199,123,.7);border-radius:10px;pointer-events:none;opacity:0}
+.au-textnode.show-frame .au-text-hud{opacity:.55}
 .au-textnode.is-selected .au-text-hud{opacity:1}
 .au-textnode.is-selected .au-text-hud::before,.au-textnode.is-selected .au-text-hud::after{content:"";position:absolute;width:10px;height:10px;border-radius:50%;background:#f3c77b;border:1.5px solid rgba(0,0,0,.6)}
 .au-textnode.is-selected .au-text-hud::before{left:-4px;top:-4px}

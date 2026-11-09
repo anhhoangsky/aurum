@@ -502,8 +502,8 @@ async function runBackground(editor, context, mode, modelId) {
   if (!result?.success) {
     throw new Error(result?.error?.message || 'AI chưa chạy được (cần tải model 1 lần)');
   }
-  // Remove/person: return mask for manual brush refine (UI composes final PNG)
-  if ((mode === 'remove' || mode === 'person') && result.masks?.[0]) {
+  // All modes return mask for manual brush refine (UI composes final with bg handling)
+  if (result.masks?.[0]) {
     const mask = result.masks[0];
     // Downscale mask to 1600px max for transfer/memory, UI upscales on apply
     const MAX = 1600;
@@ -531,7 +531,7 @@ async function runBackground(editor, context, mode, modelId) {
     }
     return { maskWidth: mw, maskHeight: mh, mask: data, modelId: result.metadata?.modelId || requestedModel, mode };
   }
-  // Blur/replace: legacy immediate load (no brush v1 — composite already baked)
+  // Fallback only if engine returned composite without mask (should not happen)
   if (result.composite) {
     const c = document.createElement('canvas');
     c.width = result.composite.width;
