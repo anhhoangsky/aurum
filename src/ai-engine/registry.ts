@@ -77,6 +77,29 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
       'fallback for backends without fp16 support.',
   },
   {
+    id: 'isnet-fp16',
+    version: '1.0.0',
+    label: 'ISNet general use 1024 (background removal, fp16)',
+    task: 'background-removal',
+    source: 'https://huggingface.co/onnx-community/ISNet-ONNX/resolve/main/onnx/model_fp16.onnx',
+    sizeBytes: 88_116_798,
+    // Verified locally 2026-11-09: matches the HF LFS oid.
+    sha256: 'dffe20331551dcc5d7601563e472448424821f2df41f5bad395848826c5b5be5',
+    license: 'Apache-2.0 (onnx-community/ISNet-ONNX; upstream ISNet general use) — verify per-artifact',
+    supportedBackends: ['webgpu', 'wasm'],
+    inputResolutions: [1024],
+    quantization: 'fp16',
+    memoryMB: 512,
+    status: 'installable',
+    notes:
+      'Pinned Phase 2 replacement (2026-11-09). 30-sample DIS_TE1 benchmark: ' +
+      'IoU 0.92 / Dice 0.96 / BoundaryF 0.83 / MAE 0.008 (desktop CPU, ~2.3s) vs ' +
+      'BiRefNet Lite 512: 0.77 / 0.84 / 0.56 / 0.0135. Preprocessing from ' +
+      'preprocessor_config.json: 1024x1024, (x-128)/256, NCHW, tensor name input. ' +
+      'memoryMB is an estimate (1024px activations); device measurement pending. ' +
+      'INT8 sibling (44MB) benchmarks nearly identical quality but 7x slower on CPU.',
+  },
+  {
     id: 'modnet-fp32',
     version: '1.0.0+fa2fa54',
     label: 'MODNet (person matting, fp32)',

@@ -151,6 +151,37 @@ function createBIREFNETAdapter(id: string): ModelAdapter {
   };
 }
 
+function createISNetAdapter(id: string): ModelAdapter {
+  return {
+    id,
+    inputSize: 1024,
+    square: true,
+    toTensor(module, input) {
+      const width = input.width;
+      const height = input.height;
+      const ctx = input.getContext('2d', { willReadFrequently: true });
+      if (!ctx) throw new Error('2D canvas is unavailable');
+      const rgba = ctx.getImageData(0, 0, width, height).data;
+      // ISNet: (x - 128) / 256 with x in 0..255 == (v - 128/255) / (256/255).
+      const data = rgbaToNCHW(rgba, width, height, 1024, [128 / 255, 128 / 255, 128 / 255], [256 / 255, 256 / 255, 256 / 255]);
+      return new module.Tensor('float32', data, [1, 3, 1024, 1024]);
+    },
+    fromTensor(output, inputSize) {
+      // ISNet output is already alpha in [0,1] (measured) — no sigmoid.
+      const dims = output.dims;
+      if (dims.length !== 4 || dims[0] !== 1 || dims[1] !== 1 || Number(dims[2]) !== inputSize || Number(dims[3]) !== inputSize) {
+        throw new Error(`Unexpected ISNet output shape: ${dims.join('x')}`);
+      }
+      if (output.data.length < inputSize * inputSize) throw new Error('ISNet output is empty');
+      const data = new Float32Array(inputSize * inputSize);
+      for (let i = 0; i < data.length; i += 1) {
+        data[i] = Math.min(1, Math.max(0, output.data[i]!));
+      }
+      return { width: inputSize, height: inputSize, data };
+    },
+  };
+}
+
 function createMODNetAdapter(id: string): ModelAdapter {
   return {
     id,
@@ -189,5 +220,6 @@ export function listModelAdapters(): ModelAdapter[] {
 // their own adapter for the same id before creating the engine.
 registerModelAdapter(createBIREFNETAdapter('birefnet-lite-512-fp16'));
 registerModelAdapter(createBIREFNETAdapter('birefnet-lite-512-fp32'));
+registerModelAdapter(createISNetAdapter('isnet-fp16'));
 registerModelAdapter(createMODNetAdapter('modnet-fp16'));
 registerModelAdapter(createMODNetAdapter('modnet-fp32'));

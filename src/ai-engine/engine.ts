@@ -162,20 +162,33 @@ class AurumAIImpl implements AurumAI {
       let adapter: ReturnType<typeof getModelAdapter>;
       let modelId = candidates[0]!;
       let bytes: ArrayBuffer | null = null;
+      let refusedOOM: string | null = null;
       for (const id of [...new Set(candidates)]) {
         adapter = getModelAdapter(id);
         if (!adapter) continue;
         const found = await loadModelBytes(id);
-        if (found) {
-          modelId = id;
-          bytes = found;
-          break;
+        if (!found) continue;
+        // Quality ladder: skip an installed model that does not fit this
+        // device's budget and try the next (smaller) candidate instead of
+        // crashing the tab.
+        const descriptor = getModelDescriptor(id);
+        const { width: sw, height: sh } = sourceSize(source);
+        const p = planSegmentation(sw, sh, this.device, adapter.inputSize);
+        const estimated = Math.max(p.estimatedPeakMB, descriptor?.memoryMB ?? 0);
+        if (estimated > this.device.memoryBudgetMB) {
+          refusedOOM = `${id} needs ~${estimated} MB > ${this.device.memoryBudgetMB} MB budget`;
+          continue;
         }
+        modelId = id;
+        bytes = found;
+        break;
       }
       if (!adapter || !bytes) {
         return failure(task, this.quality, {
-          code: 'model-not-installed',
-          message: installHint,
+          code: refusedOOM ? 'out-of-memory' : 'model-not-installed',
+          message: refusedOOM
+            ? `Các model đã cài đều vượt ngân sách bộ nhớ thiết bị (${refusedOOM}). Trên iPhone, dùng MODNet (13 MB) cho tách người.`
+            : installHint,
         });
       }
       if (!this.runtime) {
@@ -186,19 +199,6 @@ class AurumAIImpl implements AurumAI {
       }
       const descriptor = getModelDescriptor(modelId);
       const plan = planSegmentation(width, height, this.device, adapter.inputSize);
-      // iOS Safari kills the tab (uncatchable OOM) when weights + activations
-      // exceed the budget. Refuse upfront with a clear error instead.
-      // descriptor.memoryMB already includes runtime+tensors, so take the max
-      // (adding both would double-count and falsely refuse MODNet on iPhone).
-      const estimatedPeakMB = Math.max(plan.estimatedPeakMB, descriptor?.memoryMB ?? 0);
-      if (estimatedPeakMB > this.device.memoryBudgetMB) {
-        return failure(task, this.quality, {
-          code: 'out-of-memory',
-          message:
-            `Ước tính bộ nhớ ${estimatedPeakMB} MB vượt ngân sách thiết bị ${this.device.memoryBudgetMB} MB (${modelId}). ` +
-            'Trên iPhone, dùng MODNet (13 MB) thay vì BiRefNet (94 MB).',
-        });
-      }
       this.onStatus?.(`AI input ${plan.inputSize}px (${this.backend})…`);
       const loaded = await createSession(
         bytes,
@@ -255,13 +255,21 @@ class AurumAIImpl implements AurumAI {
   }
 
   async removeBackground(source: AISource, options: RemoveBackgroundOptions = {}): Promise<AIResult> {
-    const first = this.modelId.startsWith('birefnet') ? this.modelId : undefined;
+    // Quality ladder: ISNet 1024 (measured best browser-viable foreground
+    // model) first, BiRefNet Lite 512 as the small fallback. The memory
+    // guard below refuses honestly when the device budget cannot hold them.
+    const candidates = [
+      'isnet-fp16',
+      this.modelId.startsWith('birefnet') ? this.modelId : undefined,
+      'birefnet-lite-512-fp16',
+      'birefnet-lite-512-fp32',
+    ].filter((v): v is string => Boolean(v));
     return this.runWithModel(
       'background-removal',
-      [first, 'birefnet-lite-512-fp16', 'birefnet-lite-512-fp32'].filter((v): v is string => Boolean(v)),
+      candidates,
       source,
       options,
-      'BiRefNet Lite 512 is not installed. Call installModel("birefnet-lite-512-fp16") once (94 MB, verified SHA-256); inference is offline afterwards.',
+      'No background model installed. Call installModel("isnet-fp16") once (88 MB, verified SHA-256); inference is offline afterwards.',
     );
   }
 

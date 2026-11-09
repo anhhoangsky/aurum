@@ -83,14 +83,16 @@ check('Dice disjoint = 0', dice(sq, other) === 0);
 check('AlphaMAE disjoint = 20/64', approx(alphaMAE(sq, other), 20 / 64));
 
 // --- registry / device / planner (no model bytes needed) ---
-check('registry lists 9 models', listModels().length === 9 && MODEL_REGISTRY.length === 9);
+check('registry lists 10 models', listModels().length === 10 && MODEL_REGISTRY.length === 10);
 const pinned = getModelDescriptor('birefnet-lite-512-fp16');
 check('BiRefNet fp16 pinned + installable', pinned?.status === 'installable' && pinned.sha256.length === 64, pinned?.sha256.slice(0, 12) + '…');
 check('BiRefNet fp16 size 98,484,532 B', pinned?.sizeBytes === 98484532);
 const mod = getModelDescriptor('modnet-fp16');
 check('MODNet fp16 pinned + installable', mod?.status === 'installable' && mod.sizeBytes === 12984781, mod?.sha256.slice(0, 12) + '…');
 check('MODNet fp32 pinned', getModelDescriptor('modnet-fp32')?.sizeBytes === 25888640);
-check('installable set = BiRefNet + MODNet + selfie', MODEL_REGISTRY.filter((m) => m.status === 'installable').length === 5);
+check('installable set = BiRefNet + MODNet + ISNet + selfie', MODEL_REGISTRY.filter((m) => m.status === 'installable').length === 6);
+check('ISNet pinned 88,116,798 B', getModelDescriptor('isnet-fp16')?.sizeBytes === 88116798);
+check('ISNet adapter: square 1024', getModelAdapter('isnet-fp16')?.inputSize === 1024 && getModelAdapter('isnet-fp16')?.square === true);
 check('selfie segmenter pinned 249,537 B', getModelDescriptor('mediapipe-selfie-segmenter')?.sizeBytes === 249537);
 
 // --- connected components (instance splitting) ---
