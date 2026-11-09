@@ -21,7 +21,13 @@ export type IconName =
   | 'liquify'
   | 'reset'
   | 'check'
-  | 'alert';
+  | 'alert'
+  | 'text'
+  | 'bg'
+  | 'bookmark'
+  | 'trash'
+  | 'plus'
+  | 'duplicate';
 
 const PATHS: Record<IconName, string> = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -68,6 +74,15 @@ const PATHS: Record<IconName, string> = {
   check: '<path d="m5 12 4.5 4.5L19 7"/>',
   alert:
     '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5"/><circle cx="12" cy="16.5" r=".9" fill="currentColor" stroke="none"/>',
+  text: '<path d="M5 6h14M12 6v13.2"/><path d="M9.5 19.2h5"/>',
+  bg: '<path d="M12 12a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="M6.5 19.2c.6-2.3 2.8-3.6 5.5-3.6s4.9 1.3 5.5 3.6"/>',
+  bookmark:
+    '<path d="M7 3.5h10a1.5 1.5 0 0 1 1.5 1.5v15l-6.5-4.2L5.5 20V5A1.5 1.5 0 0 1 7 3.5Z"/>',
+  trash:
+    '<path d="M4 6.5h16"/><path d="M9 6V4.8A1.3 1.3 0 0 1 10.3 3.5h3.4A1.3 1.3 0 0 1 15 4.8V6"/><path d="M6.5 6.5 7.3 19a1.6 1.6 0 0 0 1.6 1.5h6.2a1.6 1.6 0 0 0 1.6-1.5l.8-12.5"/><path d="M10 10.5v6M14 10.5v6"/>',
+  plus: '<path d="M12 5.5v13M5.5 12h13"/>',
+  duplicate:
+    '<rect x="8.5" y="8.5" width="12" height="12" rx="2.3"/><path d="M15.5 8.5v-3A2.5 2.5 0 0 0 13 3H6a2.5 2.5 0 0 0-2.5 2.5v7A2.5 2.5 0 0 0 6 15h2.5"/>',
 };
 
 /** Compact inline icon, sized by CSS (`currentColor` for theming). */

@@ -95,26 +95,41 @@ function warmthColor(value: number): ColorTransform {
   return gains(1 + value * 0.16, 1 + value * 0.03, 1 - value * 0.16);
 }
 
+export type PresetCategory = 'root' | 'meitu' | 'xingtu' | 'lr' | 'mono';
+
 export interface Preset {
   id: string;
   label: string;
   labelEn: string;
   color: ColorTransform;
   css: string;
+  /** Tone family for the filter rail. `root` = built-in editor tones. */
+  category: PresetCategory;
+  /** Hint shown in the tone detail strip (procedural approx, not proprietary LUT). */
+  hint?: string;
 }
 
-function preset(id: string, label: string, labelEn: string, color: ColorTransform, css: string): Preset {
-  return { id, label, labelEn, color, css };
+function preset(
+  id: string,
+  label: string,
+  labelEn: string,
+  color: ColorTransform,
+  css: string,
+  category: PresetCategory,
+  hint?: string,
+): Preset {
+  return { id, label, labelEn, color, css, category, hint };
 }
 
 export const PRESETS: Preset[] = [
-  preset('original', 'Nguyên bản', 'Original', identityColor(), ''),
+  preset('original', 'Nguyên bản', 'Original', identityColor(), '', 'root', 'Không đổi màu'),
   preset(
     'vivid',
     'Sống động',
     'Vivid',
     compose(contrastColor(0.08), saturationColor(0.38)),
     'saturate(1.38) contrast(1.08)',
+    'root',
   ),
   preset(
     'dramatic',
@@ -125,6 +140,7 @@ export const PRESETS: Preset[] = [
       compose(contrastColor(0.27), saturationColor(-0.18)),
     ),
     'contrast(1.27) saturate(0.82)',
+    'root',
   ),
   preset(
     'mono',
@@ -132,6 +148,7 @@ export const PRESETS: Preset[] = [
     'Mono',
     compose(contrastColor(0.1), saturationColor(-1)),
     'grayscale(1) contrast(1.1)',
+    'mono',
   ),
   preset(
     'vintage',
@@ -146,9 +163,211 @@ export const PRESETS: Preset[] = [
       offset: [0.035, 0.02, 0],
     },
     'sepia(0.42) saturate(0.86) contrast(0.95)',
+    'root',
   ),
-  preset('warm', 'Ấm', 'Warm', gains(1.12, 1.02, 0.88), 'sepia(0.18) saturate(1.06) brightness(1.02)'),
-  preset('cool', 'Lạnh', 'Cool', gains(0.9, 1, 1.16), 'saturate(0.96) hue-rotate(-8deg) brightness(1.01)'),
+  preset('warm', 'Ấm', 'Warm', gains(1.12, 1.02, 0.88), 'sepia(0.18) saturate(1.06) brightness(1.02)', 'root'),
+  preset('cool', 'Lạnh', 'Cool', gains(0.9, 1, 1.16), 'saturate(0.96) hue-rotate(-8deg) brightness(1.01)', 'root'),
+  // ---- Meitu-inspired (procedural, skin-friendly) ----
+  preset(
+    'meitu-natural',
+    'Tự nhiên',
+    'Natural',
+    compose(gains(1.04, 1.02, 0.98), saturationColor(0.12)),
+    'brightness(1.03) saturate(1.12) sepia(0.08)',
+    'meitu',
+    'Meitu · Sáng nhẹ, giữ tông da tự nhiên',
+  ),
+  preset(
+    'meitu-korea',
+    'Hàn Quốc',
+    'Korea',
+    compose(gains(1.06, 1.0, 0.98), saturationColor(0.15)),
+    'brightness(1.06) saturate(1.15) contrast(0.97)',
+    'meitu',
+    'Meitu · Da hồng sáng, tương phản mềm',
+  ),
+  preset(
+    'meitu-japan',
+    'Nhật Bản',
+    'Japan',
+    compose(gains(1.03, 1.01, 1.02), contrastColor(-0.08)),
+    'brightness(1.03) saturate(1.06) contrast(0.92)',
+    'meitu',
+    'Meitu · Trong vắt, đỡ gắt',
+  ),
+  preset(
+    'meitu-skin',
+    'Sáng da',
+    'Bright Skin',
+    compose(gains(1.05, 1.03, 0.99), brightnessColor(0.14)),
+    'brightness(1.07) saturate(1.05)',
+    'meitu',
+    'Meitu · Nâng sáng vùng da, giữ chi tiết',
+  ),
+  preset(
+    'meitu-pink',
+    'Hồng đào',
+    'Peach Pink',
+    compose(gains(1.07, 0.99, 0.97), saturationColor(0.2)),
+    'saturate(1.2) brightness(1.04)',
+    'meitu',
+    'Meitu · Hồng ấm, hợp chân dung',
+  ),
+  preset(
+    'meitu-white',
+    'Trắng sáng',
+    'Bright White',
+    compose(gains(1.08, 1.08, 1.08), saturationColor(-0.05)),
+    'brightness(1.08) saturate(0.95)',
+    'meitu',
+    'Meitu · Sáng tinh khôi, giảm bão hoà nhẹ',
+  ),
+  // ---- Xingtu / Hypic-inspired (film & city) ----
+  preset(
+    'xingtu-film',
+    'Điện ảnh',
+    'Cinematic',
+    compose(gains(0.97, 1.02, 1.07), compose(contrastColor(0.12), saturationColor(0.05))),
+    'contrast(1.12) saturate(1.05) hue-rotate(-6deg)',
+    'xingtu',
+    'Xingtu · Teal–orange mềm, hợp đường phố',
+  ),
+  preset(
+    'xingtu-hk',
+    'Hồng Kông',
+    'Hong Kong',
+    compose(gains(1.02, 1.0, 1.04), compose(contrastColor(0.1), saturationColor(-0.08))),
+    'contrast(1.1) saturate(0.92) hue-rotate(4deg)',
+    'xingtu',
+    'Xingtu · Đêm đô thị, xanh lạnh',
+  ),
+  preset(
+    'xingtu-showa',
+    'Chiêu Hoà',
+    'Showa',
+    compose(gains(1.04, 1.0, 0.93), compose(contrastColor(-0.05), saturationColor(-0.15))),
+    'sepia(0.22) saturate(0.85) contrast(0.95)',
+    'xingtu',
+    'Xingtu · Hoài cổ, phai màu nhẹ',
+  ),
+  preset(
+    'xingtu-kama',
+    'Kamakura',
+    'Kamakura',
+    compose(gains(1.06, 1.02, 0.9), saturationColor(0.1)),
+    'brightness(1.05) sepia(0.2) saturate(1.1)',
+    'xingtu',
+    'Xingtu · Bình minh biển, ấm sáng',
+  ),
+  preset(
+    'xingtu-night',
+    'Ban đêm',
+    'Night',
+    compose(gains(0.94, 0.98, 1.08), compose(contrastColor(0.08), saturationColor(-0.05))),
+    'brightness(0.96) contrast(1.08) hue-rotate(-10deg)',
+    'xingtu',
+    'Xingtu · Đêm sâu, giữ bóng tối',
+  ),
+  preset(
+    'xingtu-morning',
+    'Buổi sáng',
+    'Morning',
+    compose(gains(1.07, 1.04, 0.93), saturationColor(0.08)),
+    'brightness(1.05) sepia(0.14) saturate(1.08)',
+    'xingtu',
+    'Xingtu · Nắng sớm, ấm và trong',
+  ),
+  // ---- Adobe Lightroom-inspired ----
+  preset(
+    'lr-cinema',
+    'Cinematic',
+    'Cinematic',
+    compose(gains(0.98, 1.02, 1.06), compose(contrastColor(0.15), saturationColor(0.05))),
+    'contrast(1.15) saturate(1.05) hue-rotate(-8deg)',
+    'lr',
+    'Lightroom · Điện ảnh tương phản mạnh',
+  ),
+  preset(
+    'lr-moody',
+    'Moody',
+    'Moody',
+    compose(gains(0.97, 0.98, 1.02), compose(contrastColor(0.18), saturationColor(-0.15))),
+    'contrast(1.18) saturate(0.85) brightness(0.97)',
+    'lr',
+    'Lightroom · Ẩm ướt, bóng gắt',
+  ),
+  preset(
+    'lr-vibrant',
+    'Vibrant',
+    'Vibrant',
+    compose(contrastColor(0.05), saturationColor(0.35)),
+    'saturate(1.35) contrast(1.05)',
+    'lr',
+    'Lightroom · Màu rực, hợp phong cảnh',
+  ),
+  preset(
+    'lr-pastel',
+    'Pastel',
+    'Pastel',
+    compose(gains(1.03, 1.03, 1.03), compose(contrastColor(-0.1), saturationColor(0.1))),
+    'brightness(1.04) contrast(0.9) saturate(1.1)',
+    'lr',
+    'Lightroom · Nhẹ, trong, chữ chụp đồ',
+  ),
+  preset(
+    'lr-desert',
+    'Sa mạc',
+    'Desert',
+    compose(gains(1.08, 1.0, 0.88), saturationColor(0.15)),
+    'sepia(0.28) saturate(1.15) contrast(1.04)',
+    'lr',
+    'Lightroom · Vàng cát ấm',
+  ),
+  preset(
+    'lr-street',
+    'Đường phố',
+    'Street',
+    compose(contrastColor(0.2), saturationColor(-0.1)),
+    'contrast(1.2) saturate(0.9)',
+    'lr',
+    'Lightroom · Grit, hợp street life',
+  ),
+  preset(
+    'lr-faded',
+    'Mờ phai',
+    'Faded',
+    compose(gains(1.02, 1.02, 1.02), compose(contrastColor(-0.12), saturationColor(-0.15))),
+    'brightness(1.03) contrast(0.88) saturate(0.85)',
+    'lr',
+    'Lightroom · Film phai, giảm tương phản',
+  ),
+  preset(
+    'lr-teal',
+    'Teal',
+    'Teal',
+    compose(gains(0.93, 1.04, 1.07), saturationColor(0.1)),
+    'hue-rotate(-14deg) saturate(1.1) contrast(1.05)',
+    'lr',
+    'Lightroom · Xanh teal mát',
+  ),
+  preset(
+    'mono-warm',
+    'Đen trắng ấm',
+    'Mono Warm',
+    compose(gains(1.06, 1.02, 0.94), saturationColor(-1)),
+    'grayscale(1) sepia(0.18) contrast(1.06)',
+    'mono',
+    'Đen trắng · Ấm hạt',
+  ),
+  preset(
+    'mono-cool',
+    'Đen trắng lạnh',
+    'Mono Cool',
+    compose(gains(0.94, 0.98, 1.06), saturationColor(-1)),
+    'grayscale(1) hue-rotate(-10deg) contrast(1.06)',
+    'mono',
+    'Đen trắng · Lạnh, gắt',
+  ),
 ];
 
 export function presetById(id: string): Preset {

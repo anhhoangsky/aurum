@@ -415,6 +415,95 @@ async function refineFaceLandmarks(source) {
   }
 }
 
+const RUNTIME_BG = {
+  // Pinned ORT Web 1.31.1 (matches devDependency). Inference itself is offline.
+  webgpu: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.webgpu.min.mjs',
+  wasm: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.mjs',
+};
+
+let bgEnginePromise = null;
+
+async function getBGEngine(context) {
+  if (!bgEnginePromise) {
+    context?.report?.(-1, 'Đang khởi tạo AI tách nền…');
+    bgEnginePromise = (async () => {
+      const mod = await import(trustedScriptUrl('./assets/aurum-ai-engine.esm.js?v=1'));
+      const engine = await mod.create({
+        offline: true,
+        quality: 'medium',
+        runtime: RUNTIME_BG,
+        onStatus: (m) => context?.report?.(-1, m),
+      });
+      return { engine, mod };
+    })();
+  }
+  return bgEnginePromise;
+}
+
+async function runBackground(editor, context, mode) {
+  const source = editor.sourceBitmap();
+  if (!source) throw new Error('Chưa có ảnh');
+  const { engine, mod } = await getBGEngine(context);
+  const installed = (await engine.getInstalledModels().catch(() => [])).map((m) => m.id);
+  const ensure = async (id) => {
+    if (installed.includes(id)) return;
+    context?.report?.(-1, `Đang tải model ${id} (1 lần, kiểm tra SHA-256)…`);
+    await engine.installModel(id, '', context?.signal);
+  };
+  const report = (label) => context?.report?.(-1, label);
+  let result;
+  if (mode === 'person') {
+    await ensure('modnet-fp16');
+    report('Đang tách người (MODNet, offline)…');
+    result = await engine.mattePerson(source, { signal: context?.signal, refineEdges: true });
+  } else {
+    // Prefer the measured-best ISNet when installed; otherwise install the
+    // 13 MB iPhone-safe MODNet as the matte step + BiRefNet-free fallback.
+    // Honest ladder: engine refuses with out-of-memory instead of crashing.
+    if (!installed.includes('isnet-fp16') && !installed.includes('birefnet-lite-512-fp16')) {
+      await ensure('modnet-fp16');
+    } else if (!installed.includes('isnet-fp16')) {
+      await ensure('isnet-fp16');
+    }
+    if (mode === 'blur') {
+      report('Đang tính mask + mờ nền…');
+      result = await engine.blurBackground(source, { signal: context?.signal, refineEdges: true });
+    } else if (mode === 'replace') {
+      report('Đang đổi nền trắng…');
+      const bgCanvas = document.createElement('canvas');
+      const { width, height } = editor.source();
+      bgCanvas.width = width;
+      bgCanvas.height = height;
+      const bctx = bgCanvas.getContext('2d');
+      bctx.fillStyle = '#ffffff';
+      bctx.fillRect(0, 0, width, height);
+      result = await engine.replaceBackground(source, bgCanvas, { signal: context?.signal, refineEdges: true });
+    } else {
+      report('Đang tách nền (offline)…');
+      result = await engine.removeBackground(source, { signal: context?.signal, refineEdges: true });
+    }
+  }
+  if (!result?.success) {
+    throw new Error(result?.error?.message || 'AI chưa chạy được (cần tải model 1 lần)');
+  }
+  // Turn the mask/composite into a fresh base image. load() resets history —
+  // the UI already warned the user.
+  if (result.composite) {
+    const c = document.createElement('canvas');
+    c.width = result.composite.width;
+    c.height = result.composite.height;
+    c.getContext('2d').putImageData(result.composite, 0, 0);
+    const blob = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('PNG encoding failed'))), 'image/png'));
+    await editor.load(blob);
+  } else if (result.masks?.[0]) {
+    const blob = await mod.compositeTransparentPNG(source, result.masks[0]);
+    await editor.load(blob);
+  } else {
+    throw new Error('AI không trả về mask');
+  }
+  editor.showTab('adjust');
+}
+
 const editor = new AurumEditor({
   container: '#editor',
   image: cfg.mediaUrl,
@@ -431,6 +520,7 @@ const editor = new AurumEditor({
         run: runAI,
       }
     : undefined,
+  backgroundAction: { run: runBackground },
   onSave: (blob) => uploadEdit(blob, 'overwrite'),
   onSaveCopy: (blob) => uploadEdit(blob, 'copy'),
   onClose: () => {
