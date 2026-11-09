@@ -39,11 +39,11 @@ function capsFor(
   const inputResolution: AIInputResolution =
     quality === 'low' ? 512 : quality === 'medium' ? 768 : 1024;
   if (backend === 'webgpu') {
-    if (ios) return { inputResolution, memoryBudgetMB: 192, maxInputPixels: 4_000_000 };
-    if (mobile) return { inputResolution, memoryBudgetMB: 320, maxInputPixels: 6_000_000 };
+    if (ios) return { inputResolution, memoryBudgetMB: 512, maxInputPixels: 4_000_000 };
+    if (mobile) return { inputResolution, memoryBudgetMB: 512, maxInputPixels: 6_000_000 };
     return { inputResolution, memoryBudgetMB: 768, maxInputPixels: 12_000_000 };
   }
-  if (ios) return { inputResolution, memoryBudgetMB: 128, maxInputPixels: 1_000_000 };
+  if (ios) return { inputResolution, memoryBudgetMB: 384, maxInputPixels: 1_000_000 };
   if (mobile) return { inputResolution, memoryBudgetMB: 192, maxInputPixels: 1_500_000 };
   return { inputResolution, memoryBudgetMB: 384, maxInputPixels: 4_000_000 };
 }
