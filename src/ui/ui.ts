@@ -4043,11 +4043,16 @@ export class AurumEditor extends AurumCore {
     this.peekBtn?.setAttribute('aria-pressed', String(on));
     if (!on) {
       if (this.peekCanvas) this.peekCanvas.style.display = 'none';
+      // Restore WebGL only if not in brush mode (brush hides it separately).
+      if (!this.refineOn) this.canvas.style.visibility = '';
       return;
     }
     if (!this.isReady) return;
     const source = this.sourceBitmap();
     if (!source) return;
+    // Hide the edited WebGL photo so the original overlay cannot ghost or
+    // jitter against it — same trick as brush mode (single layer only).
+    this.canvas.style.visibility = 'hidden';
     const size = this.source();
     const stageSize = this.stage.clientWidth || 1;
     const stageH = this.stage.clientHeight || 1;
@@ -4402,7 +4407,20 @@ export class AurumEditor extends AurumCore {
       this.positionFrame(this.currentFrame());
     });
     this.on('history', () => this.syncHistory());
-    this.on('render', ({ frame }) => { this.positionFrame(frame); this.positionTexts(); this.positionRefineCanvas(); });
+    this.on('render', ({ frame }) => {
+      this.positionFrame(frame);
+      this.positionTexts();
+      this.positionRefineCanvas();
+      if (this.peekOn && this.peekCanvas) {
+        const rect = this.imageDisplayRect() ?? this.displayCropRect();
+        if (rect) {
+          this.peekCanvas.style.left = `${rect.x}px`;
+          this.peekCanvas.style.top = `${rect.y}px`;
+          this.peekCanvas.style.width = `${rect.width}px`;
+          this.peekCanvas.style.height = `${rect.height}px`;
+        }
+      }
+    });
     this.on('error', ({ error }) => this.toast(error.message || this.s.exportFailed, true));
 
     this.frameEl.addEventListener('pointerdown', this.onCropPointerDown);
