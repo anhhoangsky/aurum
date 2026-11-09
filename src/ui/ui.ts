@@ -575,6 +575,25 @@ export interface RetouchAction {
   run: (editor: AurumEditor, context: RetouchActionContext, mode: RetouchMode) => Promise<RetouchBrushResult | void>;
 }
 
+/**
+ * Frozen source→output mapping for the brush bake. The stage can resize after
+ * the brush opens (the mask toolbar is shorter/taller than the AI panel), and
+ * restoring a viewport-relative zoom is not enough: the same zoom draws a
+ * different part of the photo in a different-sized stage. Keeping the exact
+ * mapping the user edited makes "Hoàn tất" independent of later layout drift.
+ */
+interface RefineBake {
+  p00: { x: number; y: number };
+  p10: { x: number; y: number };
+  p01: { x: number; y: number };
+  frame: { x: number; y: number; width: number; height: number };
+  /** Raw crop frame (not the contained display rect), for resize remapping. */
+  cropFrame: { width: number; height: number };
+  w: number;
+  h: number;
+  viewport: { width: number; height: number };
+}
+
 export interface BackgroundActionContext {
   signal: AbortSignal;
   report: (progress: number, label?: string) => void;
@@ -1027,7 +1046,9 @@ export class AurumEditor extends AurumCore {
   private refineMode: BackgroundMode = 'remove';
   private refineBaseMode: BackgroundMode = 'remove';
   private refineModelId = '';
-  private savedTransform: { zoom: number; offsetX: number; offsetY: number } | null = null;
+  private savedTransform: { zoom: number; offsetX: number; offsetY: number; rotation: number } | null = null;
+  private savedBake: RefineBake | null = null;
+  private brushRestoring = false;
   private refineKind: 'bg' | 'retouch' = 'bg';
   private retouchEffect: RetouchMode = 'whiten';
   private refineWhitened: CanvasImageSource | null = null;
@@ -2669,54 +2690,224 @@ export class AurumEditor extends AurumCore {
     this.refineCanvas.style.height = `${rect.height}px`;
   }
 
+  /**
+   * Draw a source-space bitmap so it lands exactly where the WebGL result shows
+   * it inside `frame` (stage CSS px). This mirrors the renderer's preview
+   * matrix, so 90°/fine rotation, flips, zoom and pan all line up. Perspective
+   * is approximated by the local affine at the image origin.
+   */
+  private drawTransformed(
+    ctx: CanvasRenderingContext2D,
+    image: CanvasImageSource,
+    sw: number,
+    sh: number,
+    frame: { x: number; y: number; width: number; height: number },
+    cw: number,
+    ch: number,
+    points?: Pick<RefineBake, 'p00' | 'p10' | 'p01'>,
+  ): boolean {
+    const p00 = points?.p00 ?? this.screenPointAt(0, 0);
+    const p10 = points?.p10 ?? this.screenPointAt(1, 0);
+    const p01 = points?.p01 ?? this.screenPointAt(0, 1);
+    if (!p00 || !p10 || !p01) return false;
+    const kx = cw / Math.max(1, frame.width);
+    const ky = ch / Math.max(1, frame.height);
+    const a = ((p10.x - p00.x) / Math.max(1, sw)) * kx;
+    const b = ((p10.y - p00.y) / Math.max(1, sw)) * ky;
+    const c = ((p01.x - p00.x) / Math.max(1, sh)) * kx;
+    const d = ((p01.y - p00.y) / Math.max(1, sh)) * ky;
+    const e = (p00.x - frame.x) * kx;
+    const f = (p00.y - frame.y) * ky;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.setTransform(a, b, c, d, e, f);
+    ctx.drawImage(image, 0, 0, sw, sh);
+    ctx.restore();
+    return true;
+  }
+
+  /** Full-resolution pixel size of what the crop frame currently shows. */
+  private refineOutputSize(frame: { width: number; height: number }): { w: number; h: number } {
+    const p00 = this.screenPointAt(0, 0);
+    const p10 = this.screenPointAt(1, 0);
+    const p01 = this.screenPointAt(0, 1);
+    if (!p00 || !p10 || !p01) return { w: this.refineWidth, h: this.refineHeight };
+    const stagePerSrcX = Math.hypot(p10.x - p00.x, p10.y - p00.y) / Math.max(1, this.refineWidth);
+    const stagePerSrcY = Math.hypot(p01.x - p00.x, p01.y - p00.y) / Math.max(1, this.refineHeight);
+    const w = clamp(Math.round(frame.width / Math.max(1e-6, stagePerSrcX)), 1, 8192);
+    const h = clamp(Math.round(frame.height / Math.max(1e-6, stagePerSrcY)), 1, 8192);
+    return { w, h };
+  }
+
+  /**
+   * Freeze the crop→output mapping the user is looking at. Captured from the
+   * live viewport/frame, so it is only meaningful while the brush framing is
+   * settled (normal brush, not inspection zoom).
+   */
+  private captureRefineBake(): RefineBake | null {
+    if (!this.isReady || this.refineWidth < 1 || this.refineHeight < 1) return null;
+    const vp = this.viewport();
+    if (vp.width < 8 || vp.height < 8) return null;
+    const frame = this.displayCropRect();
+    const p00 = this.screenPointAt(0, 0);
+    const p10 = this.screenPointAt(1, 0);
+    const p01 = this.screenPointAt(0, 1);
+    if (!frame || !p00 || !p10 || !p01) return null;
+    const size = this.refineOutputSize(frame);
+    const cropFrame = this.currentFrame();
+    return {
+      p00,
+      p10,
+      p01,
+      frame,
+      cropFrame: { width: cropFrame.width, height: cropFrame.height },
+      w: size.w,
+      h: size.h,
+      viewport: vp,
+    };
+  }
+
+  /** Remember the framing to return to (never part of the edit itself). */
+  private captureBrushFraming(): void {
+    if (!this.isReady) return;
+    const t = this.getState().transform;
+    this.savedTransform = {
+      zoom: t.zoom,
+      offsetX: t.offsetX,
+      offsetY: t.offsetY,
+      rotation: t.rotation,
+    };
+    this.savedBake = this.captureRefineBake();
+  }
+
+  /**
+   * A late dock/layout change (e.g. the mask toolbar replacing the AI panel)
+   * remaps zoom in `preserveCropOnResize`. Re-freeze the bake after that remap
+   * so apply bakes the same crop the user saw, not the pre-layout zoom applied
+   * to the new stage. Skipped during inspection zoom and while the view is
+   * animating back from it, since those frames are not the edit.
+   */
+  private refreshRefineBake(): void {
+    if (!this.refineOn || this.brushZoom || this.brushRestoring) return;
+    const vp = this.viewport();
+    const bake = this.savedBake;
+    const sameViewport = bake
+      && Math.abs(bake.viewport.width - vp.width) < 0.5
+      && Math.abs(bake.viewport.height - vp.height) < 0.5;
+    if (sameViewport) return;
+    const next = this.captureRefineBake();
+    if (!next) return;
+    this.savedBake = next;
+    const t = this.getState().transform;
+    this.savedTransform = {
+      zoom: t.zoom,
+      offsetX: t.offsetX,
+      offsetY: t.offsetY,
+      rotation: t.rotation,
+    };
+  }
+
+  /** Cut-out foreground at `sw`×`sh`, corners matching the source bitmap. */
+  private buildCutout(sw: number, sh: number): HTMLCanvasElement | null {
+    if (!this.refineSource || !this.refineMask) return null;
+    const out = document.createElement('canvas');
+    out.width = sw; out.height = sh;
+    const ctx = out.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(this.refineSource, 0, 0, sw, sh);
+    const mask = document.createElement('canvas');
+    mask.width = this.refineMaskWidth;
+    mask.height = this.refineMaskHeight;
+    const mctx = mask.getContext('2d');
+    if (!mctx) return null;
+    const img = mctx.createImageData(this.refineMaskWidth, this.refineMaskHeight);
+    for (let i = 0, j = 0; i < this.refineMask.length; i++, j += 4) {
+      const v = Math.round(Math.min(1, Math.max(0, this.refineMask[i] ?? 0)) * 255);
+      img.data[j] = 255;
+      img.data[j + 1] = 255;
+      img.data[j + 2] = 255;
+      img.data[j + 3] = v;
+    }
+    mctx.putImageData(img, 0, 0);
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(mask, 0, 0, sw, sh);
+    ctx.globalCompositeOperation = 'source-over';
+    return out;
+  }
+
+  /** Paint the blurred background from the transformed source. */
+  private paintBlurBg(
+    ctx: CanvasRenderingContext2D,
+    frame: { x: number; y: number; width: number; height: number },
+    w: number,
+    h: number,
+    points?: Pick<RefineBake, 'p00' | 'p10' | 'p01'>,
+  ): void {
+    const base = document.createElement('canvas');
+    base.width = w; base.height = h;
+    const bctx = base.getContext('2d');
+    if (!bctx || !this.refineSource) return;
+    this.drawTransformed(bctx, this.refineSource, this.refineWidth, this.refineHeight, frame, w, h, points);
+    const small = document.createElement('canvas');
+    small.width = Math.max(1, w >> 3);
+    small.height = Math.max(1, h >> 3);
+    const sctx = small.getContext('2d');
+    if (!sctx) return;
+    sctx.imageSmoothingEnabled = true;
+    sctx.imageSmoothingQuality = 'high';
+    sctx.drawImage(base, 0, 0, small.width, small.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(small, 0, 0, w, h);
+  }
+
   private drawRefinePreview(): void {
     if (!this.refineOn || !this.refineCanvas || !this.refineSource || !this.refineMask) return;
     const canvas = this.refineCanvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const uv = this.cropUVRect();
-    const cropW = Math.max(1, Math.round((uv.u1 - uv.u0) * this.refineWidth));
-    const cropH = Math.max(1, Math.round((uv.v1 - uv.v0) * this.refineHeight));
+    const frame = this.displayCropRect();
+    if (!frame) return;
     const maxSide = 720;
-    const k = Math.min(1, maxSide / Math.max(cropW, cropH));
-    const w = Math.max(1, Math.round(cropW * k));
-    const h = Math.max(1, Math.round(cropH * k));
+    const k = Math.min(1, maxSide / Math.max(frame.width, frame.height));
+    const w = Math.max(1, Math.round(frame.width * k));
+    const h = Math.max(1, Math.round(frame.height * k));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     this.positionRefineCanvas();
-    const sx = Math.round(uv.u0 * this.refineWidth);
-    const sy = Math.round(uv.v0 * this.refineHeight);
-    const sw = Math.max(1, Math.round((uv.u1 - uv.u0) * this.refineWidth));
-    const sh = Math.max(1, Math.round((uv.v1 - uv.v0) * this.refineHeight));
-    // Hold-Original inside brush: show the untouched crop (no brush effect).
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    // Hold-Original inside brush: untouched crop, no brush effect.
     if (this.peekOn) {
-      ctx.drawImage(this.refineSource, sx, sy, sw, sh, 0, 0, w, h);
+      this.drawTransformed(ctx, this.refineSource, this.refineWidth, this.refineHeight, frame, w, h);
       return;
     }
-    // Brush preview (crop content only — full image would double against the
-    // framed WebGL photo after a crop).
-    const pm = this.resizeMaskCrop(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, uv, w, h);
     if (this.refineKind === 'retouch') {
-      ctx.drawImage(this.refineSource, sx, sy, sw, sh, 0, 0, w, h);
-      const img = ctx.getImageData(0, 0, w, h);
-      this.mixRetouchInto(img.data, w, h, pm);
-      ctx.putImageData(img, 0, 0);
+      // Effects are per-pixel in source space, so process a downscaled copy
+      // there and only then map it through the view transform.
+      const maxSrc = 760;
+      const mk = Math.min(1, maxSrc / Math.max(this.refineWidth, this.refineHeight));
+      const sw = Math.max(1, Math.round(this.refineWidth * mk));
+      const sh = Math.max(1, Math.round(this.refineHeight * mk));
+      const src = document.createElement('canvas');
+      src.width = sw; src.height = sh;
+      const sctx = src.getContext('2d', { willReadFrequently: true });
+      if (!sctx) return;
+      sctx.drawImage(this.refineSource, 0, 0, sw, sh);
+      const img = sctx.getImageData(0, 0, sw, sh);
+      const pm = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, sw, sh);
+      this.mixRetouchInto(img.data, sw, sh, pm);
+      sctx.putImageData(img, 0, 0);
+      this.drawTransformed(ctx, src, sw, sh, frame, w, h);
       return;
     }
     if (this.refineMode === 'replace') {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, w, h);
     } else if (this.refineMode === 'blur') {
-      // Blurred background preview (downscale trick, same as engine blur)
-      const small = document.createElement('canvas');
-      const sw2 = Math.max(1, w >> 3), sh2 = Math.max(1, h >> 3);
-      small.width = sw2; small.height = sh2;
-      const sctx = small.getContext('2d');
-      if (sctx) {
-        sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
-        sctx.drawImage(this.refineSource, sx, sy, sw, sh, 0, 0, sw2, sh2);
-        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(small, 0, 0, w, h);
-      }
+      this.paintBlurBg(ctx, frame, w, h);
     } else {
       const cell = Math.max(4, Math.round(w / 24));
       for (let y = 0; y < h; y += cell) {
@@ -2726,22 +2917,14 @@ export class AurumEditor extends AurumCore {
         }
       }
     }
-    // downscaled mask for preview (background only; retouch returned above)
-    // Composite: bg already drawn on ctx (fully opaque), overlay fg with
-    // alpha mask. The opaque bg covers the stage's original photo underneath.
-    const fg = document.createElement('canvas');
-    fg.width = w; fg.height = h;
-    const fctx = fg.getContext('2d');
-    if (!fctx) return;
-    fctx.drawImage(this.refineSource, sx, sy, sw, sh, 0, 0, w, h);
-    const fgImg = fctx.getImageData(0, 0, w, h);
-    const fd = fgImg.data;
-    for (let i = 0, j = 0; i < pm.length; i++, j += 4) {
-      fd[j + 3] = Math.round(Math.min(1, Math.max(0, pm[i] ?? 0)) * 255);
-    }
-    fctx.putImageData(fgImg, 0, 0);
-    ctx.drawImage(fg, 0, 0);
-    // brush ring hint is native cursor; keep pointer-events auto
+    // Cut-out foreground, built in source space at preview resolution and then
+    // mapped through the same view transform as the photo.
+    const maxSrc = 760;
+    const mk = Math.min(1, maxSrc / Math.max(this.refineWidth, this.refineHeight));
+    const sw = Math.max(1, Math.round(this.refineWidth * mk));
+    const sh = Math.max(1, Math.round(this.refineHeight * mk));
+    const fg = this.buildCutout(sw, sh);
+    if (fg) this.drawTransformed(ctx, fg, sw, sh, frame, w, h);
   }
 
   private syncBrushChrome(): void {
@@ -2799,12 +2982,26 @@ export class AurumEditor extends AurumCore {
     }
     const rect = this.refineCanvas.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return;
-    const scaleX = rect.width / Math.max(1, this.refineMaskWidth);
-    const scaleY = rect.height / Math.max(1, this.refineMaskHeight);
-    const radiusMask = this.brushRadiusMask();
-    const r = Math.max(3, radiusMask * Math.min(scaleX, scaleY));
-    const d = r * 2;
     const x = this.brushPointer.x, y = this.brushPointer.y;
+    // The brush canvas now covers only the crop, so mask-px per screen-px is
+    // not rect/maskWidth. Derive it from the render transform so the ring
+    // stays the true size on a cropped, rotated or zoomed photo.
+    const stageRect = this.stage.getBoundingClientRect();
+    const center = this.sourcePointAt(stageRect.left + x, stageRect.top + y);
+    let maskPerPx = 0;
+    if (center) {
+      const edge = this.sourcePointAt(stageRect.left + x + 10, stageRect.top + y);
+      if (edge) {
+        maskPerPx = Math.hypot(
+          (edge.x - center.x) * this.refineMaskWidth,
+          (edge.y - center.y) * this.refineMaskHeight,
+        ) / 10;
+      }
+    }
+    const fallback = Math.min(rect.width / Math.max(1, this.refineMaskWidth), rect.height / Math.max(1, this.refineMaskHeight));
+    const radiusMask = this.brushRadiusMask();
+    const r = Math.max(3, maskPerPx > 1e-6 ? radiusMask / maskPerPx : radiusMask * fallback);
+    const d = r * 2;
     this.brushRingEl.style.width = `${d}px`;
     this.brushRingEl.style.height = `${d}px`;
     this.brushRingEl.style.transform = `translate(-50%,-50%) translate(${x}px,${y}px)`;
@@ -2896,6 +3093,30 @@ export class AurumEditor extends AurumCore {
   }
 
   private setBrushZoom(on: boolean): void {
+    // Entering zoom: the current framing is the one to come back to. Freeze it
+    // now, before the inspection settle, so panning around the mask can never
+    // leak into the bake.
+    if (on && !this.brushZoom) {
+      this.savedBake = this.savedBake ?? this.captureRefineBake();
+      const t = this.getState().transform;
+      this.savedTransform = {
+        zoom: t.zoom,
+        offsetX: t.offsetX,
+        offsetY: t.offsetY,
+        rotation: t.rotation,
+      };
+    }
+    // Leaving zoom mode is not an edit: return to the pre-brush framing so the
+    // next stroke starts where the user left off and "Hoàn tất" bakes the crop
+    // the user actually chose, not the inspection viewport.
+    if (!on && this.brushZoom) {
+      this.brushRestoring = true;
+      this.restoreBrushFraming(true);
+      window.setTimeout(() => {
+        this.brushRestoring = false;
+        if (this.refineOn && !this.brushZoom) this.refreshRefineBake();
+      }, 340);
+    }
     this.brushZoom = on;
     // Auto-zoom on entry so iPhone users see the mode engage; pan/pinch then
     // work around the zoomed image. At fit-zoom pan alone shows nothing.
@@ -2916,12 +3137,21 @@ export class AurumEditor extends AurumCore {
 
   private showBrush(): void {
     this.ensureRefineCanvas();
-    // Zoom/pan during brush is inspection only — remember the framing so it
-    // can be restored when the brush closes (never part of the edit itself).
+    this.brushRestoring = false;
+    // Zoom/pan during brush is inspection only — remember the framing and the
+    // exact crop→output mapping so they can be restored when the brush closes.
     if (!this.savedTransform && this.isReady) {
-      const t = this.getState().transform;
-      this.savedTransform = { zoom: t.zoom, offsetX: t.offsetX, offsetY: t.offsetY };
+      this.captureBrushFraming();
+      // Entering the brush swaps the dock for mask tools, which can shrink the
+      // stage. `preserveCropOnResize` re-normalizes zoom for the new viewport
+      // before the first paint, so re-capture once the layout has settled —
+      // otherwise the pre-layout mapping would bake a cropped-in view.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!this.refineOn || this.brushZoom || !this.savedTransform) return;
+        this.captureBrushFraming();
+      }));
     }
+    this.savedBake = this.savedBake ?? this.captureRefineBake();
     // Hide the WebGL photo while brushing so two layers can never ghost or
     // appear offset at the edges when zoomed — only the brush preview shows.
     this.canvas.style.visibility = 'hidden';
@@ -2941,6 +3171,8 @@ export class AurumEditor extends AurumCore {
   }
 
   private enterRefine(source: CanvasImageSource, w: number, h: number, mask: Float32Array, mw: number, mh: number, mode: BackgroundMode, modelId: string): void {
+    this.savedTransform = null;
+    this.savedBake = null;
     this.refineOn = true;
     this.refineKind = 'bg';
     this.refineWhitened = null;
@@ -2962,6 +3194,8 @@ export class AurumEditor extends AurumCore {
     whitened: CanvasImageSource, whitenW: number, whitenH: number,
     effect: RetouchMode = 'whiten',
   ): void {
+    this.savedTransform = null;
+    this.savedBake = null;
     this.refineOn = true;
     this.refineKind = 'retouch';
     this.retouchEffect = effect;
@@ -2983,12 +3217,14 @@ export class AurumEditor extends AurumCore {
     if (rect.width < 2 || rect.height < 2) return;
     const stageRect = this.stage.getBoundingClientRect();
     this.brushPointer = { x: e.clientX - stageRect.left, y: e.clientY - stageRect.top };
-    const fx = clamp01((e.clientX - rect.left) / rect.width);
-    const fy = clamp01((e.clientY - rect.top) / rect.height);
-    const uv = this.cropUVRect();
-    const cx = (uv.u0 + fx * (uv.u1 - uv.u0)) * this.refineMaskWidth;
-    const cy = (uv.v0 + fy * (uv.v1 - uv.v0)) * this.refineMaskHeight;
-    const radius = this.brushRadiusMask() / Math.max(0.1, Math.max(uv.u1 - uv.u0, uv.v1 - uv.v0));
+    // Map the pointer through the exact render transform (crop + rotation +
+    // flip + zoom + pan) instead of assuming an axis-aligned crop. The old
+    // UV-bounds shortcut drifted after a crop and painted the wrong pixels.
+    const point = this.sourcePointAt(e.clientX, e.clientY);
+    if (!point) return;
+    const cx = point.x * this.refineMaskWidth;
+    const cy = point.y * this.refineMaskHeight;
+    const radius = this.brushRadiusMask();
     this.brushDabLocal(cx, cy, radius, 0.9);
     this.drawRefinePreview();
     this.updateBrushRing();
@@ -3034,6 +3270,63 @@ export class AurumEditor extends AurumCore {
     this.drawRefinePreview();
   }
 
+  /**
+   * Put the photo back exactly where it was before the brush opened. Zoom, pan
+   * and rotation inside the brush are inspection-only, so they must never end
+   * up in the exported edit. `animated` keeps the exit calm; apply/cancel from
+   * a zoomed state restores synchronously so the bake uses the user's crop.
+   */
+  private restoreBrushFraming(animated: boolean): void {
+    const saved = this.savedTransform;
+    if (!saved) return;
+    this.savedTransform = null;
+    const target = {
+      zoom: saved.zoom,
+      offsetX: saved.offsetX,
+      offsetY: saved.offsetY,
+      rotation: saved.rotation,
+    };
+    // If the stage changed size while the user was inspecting the mask, the
+    // saved zoom belongs to the old viewport. Re-map it the same way
+    // `preserveCropOnResize` would have, so exiting zoom still shows the crop
+    // the user chose instead of a different (smaller/larger) region.
+    const bake = this.savedBake;
+    const vp = this.viewport();
+    if (bake && (Math.abs(vp.width - bake.viewport.width) > 0.5
+      || Math.abs(vp.height - bake.viewport.height) > 0.5)) {
+      const src = this.source();
+      if (src.width >= 2 && src.height >= 2) {
+        const coverBefore = Math.max(
+          bake.viewport.width / src.width,
+          bake.viewport.height / src.height,
+        ) || 1;
+        const coverAfter = Math.max(vp.width / src.width, vp.height / src.height) || 1;
+        const frameNow = this.currentFrame();
+        target.zoom = clamp(
+          saved.zoom * (frameNow.width / Math.max(1, bake.cropFrame.width)) * (coverBefore / coverAfter),
+          0.2,
+          this.maxZoom,
+        );
+      }
+    }
+    if (animated) {
+      if (Math.abs(this.state.transform.rotation - saved.rotation) > 1e-4) {
+        this.applyTransform({ rotation: saved.rotation });
+      }
+      try {
+        this.settle({ zoom: target.zoom, offsetX: target.offsetX, offsetY: target.offsetY }, 250);
+        return;
+      } catch {
+        // fall through to the synchronous path
+      }
+    }
+    try {
+      this.applyTransform(target);
+    } catch {
+      // Headless/test harness without a transform host.
+    }
+  }
+
   private cancelRefine(): void {
     this.refineOn = false;
     this.refineKind = 'bg';
@@ -3041,20 +3334,13 @@ export class AurumEditor extends AurumCore {
     this.refineMask = null;
     this.refineHistory = [];
     this.brushZoom = false;
+    this.brushRestoring = false;
     this.syncToolButtons();
     this.hideBrushRing();
     this.canvas.style.visibility = '';
     // Inspection zoom is not an edit — restore the framing from before the brush.
-    if (this.savedTransform) {
-      const saved = this.savedTransform;
-      this.savedTransform = null;
-      try {
-        this.settle(saved, 250);
-      } catch {
-        try { this.applyTransform(saved); } catch { // ignore
-        }
-      }
-    }
+    this.restoreBrushFraming(true);
+    this.savedBake = null;
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
     if (this.maskToolbar) this.maskToolbar.style.display = 'none';
     for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
@@ -3065,52 +3351,46 @@ export class AurumEditor extends AurumCore {
 
   private async applyRefine(): Promise<void> {
     if (!this.refineOn || !this.refineSource || !this.refineMask) return;
-    const uv = this.cropUVRect();
-    const sx = Math.round(uv.u0 * this.refineWidth);
-    const sy = Math.round(uv.v0 * this.refineHeight);
-    const w = Math.max(1, Math.round((uv.u1 - uv.u0) * this.refineWidth));
-    const h = Math.max(1, Math.round((uv.v1 - uv.v0) * this.refineHeight));
-    const fullMask = this.resizeMaskCrop(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, uv, w, h);
+    // Bake the frozen crop→output mapping. The stage can change size between
+    // brush entry and apply (dock/layout changes); recomputing from the live
+    // view would then bake a smaller crop than the user selected. Inspection
+    // zoom is also excluded here by design: the bake is captured before it.
+    const bake = this.savedBake;
+    this.restoreBrushFraming(false);
+    const frame = bake?.frame ?? this.displayCropRect();
+    if (!frame) return;
+    const size = bake ? { w: bake.w, h: bake.h } : this.refineOutputSize(frame);
+    const w = size.w;
+    const h = size.h;
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     if (this.refineKind === 'retouch') {
       // Procedural effect from the original pixels (same formula as preview),
-      // gated by the AI mask + brushed weight.
-      ctx.drawImage(this.refineSource, sx, sy, w, h, 0, 0, w, h);
-      const img = ctx.getImageData(0, 0, w, h);
-      this.mixRetouchInto(img.data, w, h, fullMask);
-      ctx.putImageData(img, 0, 0);
+      // gated by the AI mask + brushed weight. Process in source space at full
+      // resolution, then bake the current crop/rotation via the view transform.
+      const src = document.createElement('canvas');
+      src.width = this.refineWidth; src.height = this.refineHeight;
+      const sctx = src.getContext('2d', { willReadFrequently: true });
+      if (!sctx) return;
+      sctx.drawImage(this.refineSource, 0, 0, this.refineWidth, this.refineHeight);
+      const img = sctx.getImageData(0, 0, this.refineWidth, this.refineHeight);
+      const fullMask = this.resizeMaskLocal(this.refineMask, this.refineMaskWidth, this.refineMaskHeight, this.refineWidth, this.refineHeight);
+      this.mixRetouchInto(img.data, this.refineWidth, this.refineHeight, fullMask);
+      sctx.putImageData(img, 0, 0);
+      this.drawTransformed(ctx, src, this.refineWidth, this.refineHeight, frame, w, h, bake ?? undefined);
     } else {
-      // Build background
+      // Build background. `remove` stays transparent (PNG alpha).
       if (this.refineMode === 'replace') {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, w, h);
       } else if (this.refineMode === 'blur') {
-        const small = document.createElement('canvas');
-        small.width = Math.max(1, w >> 3); small.height = Math.max(1, h >> 3);
-        const sctx = small.getContext('2d');
-        if (sctx) {
-          sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
-          sctx.drawImage(this.refineSource, sx, sy, w, h, 0, 0, small.width, small.height);
-          ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(small, 0, 0, w, h);
-        }
+        this.paintBlurBg(ctx, frame, w, h, bake ?? undefined);
       }
-      // Foreground with mask
-      const fg = document.createElement('canvas');
-      fg.width = w; fg.height = h;
-      const fctx = fg.getContext('2d');
-      if (!fctx) return;
-      fctx.drawImage(this.refineSource, sx, sy, w, h, 0, 0, w, h);
-      const img = fctx.getImageData(0, 0, w, h);
-      const d = img.data;
-      for (let i = 0, j = 0; i < fullMask.length; i++, j += 4) {
-        d[j + 3] = Math.round(Math.min(1, Math.max(0, fullMask[i] ?? 0)) * 255);
-      }
-      fctx.putImageData(img, 0, 0);
-      ctx.drawImage(fg, 0, 0);
+      // Foreground cut-out at full source resolution, baked through the view.
+      const fg = this.buildCutout(this.refineWidth, this.refineHeight);
+      if (fg) this.drawTransformed(ctx, fg, this.refineWidth, this.refineHeight, frame, w, h, bake ?? undefined);
     }
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
     if (!blob) {
@@ -4130,7 +4410,11 @@ export class AurumEditor extends AurumCore {
   private cropUVRect(): { u0: number; v0: number; u1: number; v1: number } {
     const full = { u0: 0, v0: 0, u1: 1, v1: 1 };
     if (!this.isReady) return full;
-    const frame = this.currentFrame();
+    // Brush mode always runs in result mode, where the crop frame sits at
+    // `displayCropRect()` (the stage-contained frame), not at the crop-mode
+    // `currentFrame()` coordinates. Sampling the latter shifted the preview
+    // and every brush dab inward after a crop.
+    const frame = this.displayCropRect() ?? this.currentFrame();
     const stageRect = this.stage.getBoundingClientRect();
     const corners = [
       { x: frame.x, y: frame.y },
@@ -4486,9 +4770,12 @@ export class AurumEditor extends AurumCore {
       this.positionFrame(frame);
       this.positionTexts();
       // Crop content pans under the fixed frame during zoom — redraw it so
-      // the brush preview never drifts from the WebGL photo.
-      if (this.refineOn && this.currentTab === 'ai') this.drawRefinePreview();
-      else this.positionRefineCanvas();
+      // the brush preview never drifts from the WebGL photo. A resize also
+      // re-maps zoom; refresh the frozen bake after that remap.
+      if (this.refineOn && this.currentTab === 'ai') {
+        this.refreshRefineBake();
+        this.drawRefinePreview();
+      } else this.positionRefineCanvas();
       if (this.peekOn && this.peekCanvas) {
         const rect = this.imageDisplayRect() ?? this.displayCropRect();
         if (rect) {
@@ -5045,8 +5332,10 @@ export class AurumEditor extends AurumCore {
       button.addEventListener('click', () => {
         // Toggle: tap the active tone again to turn it off (back to Nguyên bản).
         // Saved presets clear the same way via applyUserPreset(). Original
-        // itself never toggles (it IS the off state).
-        if (current === preset.id && preset.id !== 'original') {
+        // itself never toggles (it IS the off state). Read the live state —
+        // the `current` captured at build time is stale after the first tap
+        // because applying a filter does not rebuild the rail.
+        if (this.getState().filter === preset.id && preset.id !== 'original') {
           this.activeSavedId = null;
           this.savedReturnState = null;
           this.setFilter('original');
@@ -5345,8 +5634,9 @@ export class AurumEditor extends AurumCore {
     const hasTrans = this.detectAlpha();
     const est = this.estimateBytes(size.width, size.height);
     this.metaInfo.textContent = `${size.width} × ${size.height} px · ${format.label} · ~${est}`;
-    this.exportSubEl.textContent = hasTrans && format.type !== 'image/png'
-      ? (this.locale === 'vi' ? 'Nền trong suốt sẽ bị bẹt trên JPEG/WebP — chọn PNG để giữ.' : 'Transparency will be flattened on JPEG/WebP — choose PNG to keep it.')
+    // PNG and WebP both carry alpha; only JPEG flattens it.
+    this.exportSubEl.textContent = hasTrans && format.type === 'image/jpeg'
+      ? (this.locale === 'vi' ? 'Nền trong suốt sẽ bị bẹt trên JPEG — chọn PNG hoặc WebP để giữ.' : 'Transparency will be flattened on JPEG — choose PNG or WebP to keep it.')
       : this.s.exportSub;
     for (const [type, button] of this.formatButtons) {
       button.setAttribute('aria-pressed', String(type === this.exportType));

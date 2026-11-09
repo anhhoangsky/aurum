@@ -1019,8 +1019,8 @@
 .au-ai-pane__icon{width:34px;height:34px;flex:0 0 34px;border-radius:11px;display:grid;place-items:center;color:#2a1c06;background:linear-gradient(180deg,#f9d693,#e2ad52);box-shadow:0 6px 18px rgba(226,173,82,.22)}
 .au-ai-pane__icon svg{width:18px;height:18px}
 .au-ai-pane__texts{flex:1 1 auto;min-width:0}
-.au-maskprev{position:absolute;inset:auto;z-index:4;display:none;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.4);touch-action:none;cursor:crosshair}
-.au-peekprev{position:absolute;inset:auto;z-index:5;display:none;pointer-events:none;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.au-maskprev{position:absolute;inset:auto;z-index:4;display:none;border-radius:0;box-shadow:none;touch-action:none;cursor:crosshair}
+.au-peekprev{position:absolute;inset:auto;z-index:5;display:none;pointer-events:none;border-radius:0;box-shadow:none}
 .au-top__ai.is-on{background:linear-gradient(180deg,#f9d693,#e2ad52);color:#2a1c06;border-color:rgba(255,235,190,.65)}
 .au-top__ai.is-on svg{color:#2a1c06}
 .au-mask-tools{margin-top:10px;padding:10px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09)}

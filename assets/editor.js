@@ -40,7 +40,18 @@ function downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-async function uploadEdit(blob, mode) {
+// The fallback download must carry the format the user picked. The old code
+// reused cfg.uploadName (a .jpg) for every export, so a PNG/WebP saved through
+// the "no backend" path landed with the wrong extension and could confuse the
+// OS/Photos. Derive the extension from the encoded blob instead.
+function localDownloadName(blob) {
+  const mime = (blob && blob.type) || '';
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  const base = (cfg.uploadName || `${cfg.stem || 'demo'}.jpg`).replace(/\.[a-z0-9]+$/i, '');
+  return `${base || 'aurum'}.${ext}`;
+}
+
+async function uploadEdit(blob, mode, downloadAs) {
   const form = new FormData();
   form.append('csrf', cfg.csrf);
   form.append('id', String(cfg.id));
@@ -58,7 +69,7 @@ async function uploadEdit(blob, mode) {
   } catch (error) {
     setHeicNote(false);
     console.warn('[aurum] save failed, downloading locally instead:', error);
-    downloadBlob(blob, cfg.uploadName || `${cfg.stem || 'demo'}.jpg`);
+    downloadBlob(blob, downloadAs || localDownloadName(blob));
     return;
   }
   let data = null;
@@ -73,7 +84,7 @@ async function uploadEdit(blob, mode) {
     // locally instead of erroring, so export still works for testing.
     if (response.status === 404 || !data) {
       console.warn('[aurum] no save backend, downloading locally instead');
-      downloadBlob(blob, cfg.uploadName || `${cfg.stem || 'demo'}.jpg`);
+      downloadBlob(blob, downloadAs || localDownloadName(blob));
       return;
     }
     throw new Error((data && data.message) || 'Máy chủ không lưu được ảnh đã chỉnh sửa.');
@@ -696,8 +707,8 @@ const editor = new AurumEditor({
     : undefined,
   backgroundAction: { run: runBackground },
   retouchAction: { run: runRetouch },
-  onSave: (blob) => uploadEdit(blob, 'overwrite'),
-  onSaveCopy: (blob) => uploadEdit(blob, 'copy'),
+  onSave: (blob, name) => uploadEdit(blob, 'overwrite', name),
+  onSaveCopy: (blob, name) => uploadEdit(blob, 'copy', name),
   onClose: () => {
     if (!editor.canUndo() || window.confirm('Bỏ các thay đổi và quay lại ảnh?')) {
       location.href = cfg.viewUrl || `${cfg.returnUrl}?view=${encodeURIComponent(cfg.id)}`;

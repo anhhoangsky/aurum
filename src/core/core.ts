@@ -514,11 +514,18 @@ export class AurumCore {
     const size = this.source();
     const transform = this.state.transform;
     const view = this.paintView();
-    const px = clientX - rect.left - viewport.width / 2;
-    const py = clientY - rect.top - viewport.height / 2;
+    // Result mode scales the whole stage around the origin, so undo the view
+    // transform BEFORE subtracting the stage centre. Scaling only the
+    // centre-relative offset (the old form) made every pointer mapping drift
+    // by (centre * (scale - 1)) whenever the crop did not fill the stage.
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
     const geometry = imageGeometry(viewport, size.width, size.height, transform);
     const crop = inverseRotatePoint(
-      { x: (px - view.x) / view.scale, y: (py - view.y) / view.scale },
+      {
+        x: (px - view.x) / view.scale - viewport.width / 2,
+        y: (py - view.y) / view.scale - viewport.height / 2,
+      },
       geometry.radians,
     );
     const warped = {
@@ -551,9 +558,11 @@ export class AurumCore {
       },
       geometry.radians,
     );
+    // Inverse of `sourcePointAt`, matching the renderer: the whole stage
+    // coordinate is scaled, not just the centre-relative offset.
     return {
-      x: viewport.width / 2 + rotated.x * view.scale + view.x,
-      y: viewport.height / 2 + rotated.y * view.scale + view.y,
+      x: (viewport.width / 2 + rotated.x) * view.scale + view.x,
+      y: (viewport.height / 2 + rotated.y) * view.scale + view.y,
     };
   }
 
