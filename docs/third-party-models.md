@@ -14,6 +14,7 @@ redistributing the weights or shipping a build that bundles them.
 | BiRefNet Lite 512 (fp16/fp32) | `birefnet-lite-512-fp16`, `birefnet-lite-512-fp32` | `studioludens/birefnet-lite-512` | MIT | Upstream `ZhengPeng7/BiRefNet_lite` is MIT. |
 | ISNet general use 1024 (fp16) | `isnet-fp16` | `onnx-community/ISNet-ONNX` | **AGPL-3.0** | Copyleft. Review obligations before redistribution or a hosted service. Selected for quality, not license. |
 | MODNet (fp32/fp16) | `modnet-fp32`, `modnet-fp16` | `Xenova/modnet` | Apache-2.0 | Fallback person matting. Upstream MODNet is Apache-2.0/NACC. |
+| BiSeNet face parsing (ResNet18, 512 px) | `face-parsing-bisenet` | `jbrownkramer/face-parsing` | MIT | Hair/skin/hat face parsing. Upstream `yakhyo/face-parsing` (© Yakhyokhuja Valikhujaev) is MIT. Run on a face crop, not the full frame. Used for hair colour and the hair mask only. |
 | BlazeFace ONNX (128 px) | `blazeface-onnx` | `garavv/blazeface-onnx` | **Not declared** | The conversion card has no license metadata. Upstream MediaPipe BlazeFace is Apache-2.0, but that does not automatically license this ONNX conversion. Verify before redistribution. |
 | MediaPipe Selfie Segmenter | `mediapipe-selfie-segmenter` | descriptor only | Apache-2.0 | Not the default path; MediaPipe model card. |
 | LongPipe XL | `longpipe-xl` | — | unknown | Blocked: no verifiable public artifact. |

@@ -61,3 +61,62 @@ export function decodeBlazeBoxes(output: OrtTensor): DecodedFace[] {
   }
   return faces;
 }
+
+/** BiSeNet face-parsing input: [1,3,512,512], RGB /255 then ImageNet normalize. */
+export function faceParsingToTensor(
+  module: { Tensor: new (t: string, d: Float32Array | BigInt64Array, dims: readonly number[]) => OrtTensor },
+  input: HTMLCanvasElement,
+  size = 512,
+): OrtTensor {
+  const ctx = input.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('2D canvas is unavailable');
+  const rgba = ctx.getImageData(0, 0, input.width, input.height).data;
+  const mean = [0.485, 0.456, 0.406];
+  const std = [0.229, 0.224, 0.225];
+  const plane = size * size;
+  const data = new Float32Array(3 * plane);
+  for (let y = 0; y < size; y++) {
+    const sy = Math.min(input.height - 1, Math.floor((y / size) * input.height));
+    for (let x = 0; x < size; x++) {
+      const sx = Math.min(input.width - 1, Math.floor((x / size) * input.width));
+      const at = (sy * input.width + sx) * 4;
+      const dst = y * size + x;
+      for (let c = 0; c < 3; c++) {
+        data[c * plane + dst] = ((rgba[at + c] ?? 0) / 255 - mean[c]!) / std[c]!;
+      }
+    }
+  }
+  return new module.Tensor('float32', data, [1, 3, size, size]);
+}
+
+/**
+ * Soft hair probability from the BiSeNet logits [1,19,H,W] (class 17 = hair).
+ * Using a one-vs-best sigmoid instead of a full 19-way softmax keeps this
+ * cheap enough for a 512² mask on a phone while still giving featherable
+ * edges. Hat (18) is deliberately ignored: on non-studio photos it tends to
+ * absorb jackets and sunglasses.
+ */
+export function faceParsingHairMask(output: OrtTensor): { width: number; height: number; data: Float32Array } {
+  const dims = output.dims;
+  const classes = dims.length === 4 ? dims[1]! : 19;
+  const h = dims.length === 4 ? dims[2]! : Math.round(Math.sqrt((output.data as Float32Array).length / classes));
+  const w = dims.length === 4 ? dims[3]! : h;
+  const plane = w * h;
+  const logits = output.data as Float32Array;
+  const out = new Float32Array(plane);
+  if (classes <= 17) return { width: w, height: h, data: out };
+  for (let p = 0; p < plane; p++) {
+    let best = -Infinity;
+    for (let c = 0; c < classes; c++) {
+      if (c === 17) continue;
+      const v = logits[c * plane + p] ?? -Infinity;
+      if (v > best) best = v;
+    }
+    const hair = logits[17 * plane + p] ?? -Infinity;
+    const diff = hair - best;
+    // p = sigmoid(diff), clamped to 0 in the ambiguous lower half so skin
+    // and background do not pick up a faint tint.
+    out[p] = diff <= 0 ? 0 : 1 / (1 + Math.exp(-diff));
+  }
+  return { width: w, height: h, data: out };
+}

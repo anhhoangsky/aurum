@@ -40,6 +40,31 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     notes: 'Pinned Phase 1. Inputs: image [1,3,128,128] RGB/255, conf_threshold [1] float, max_detections [1] int64, iou_threshold [1] float. Output selectedBoxes [1,16] = top_y,top_x,bot_y,bot_x, eyeL x/y, eyeR x/y, nose x/y, mouth x/y, earL x/y, earR x/y (HF README quick-start order, note y/x swapped in doc comment). Python ORT CPU smoke 2026-11-09: portrait.jpg → 1 box ~8 ms. iPhone WebGPU pending (Phase 6).',
   },
   {
+    id: 'face-parsing-bisenet',
+    version: '1.0.0',
+    label: 'BiSeNet face parsing (ResNet18, 512px, hair)',
+    task: 'hair-color',
+    source: 'https://huggingface.co/jbrownkramer/face-parsing/resolve/main/resnet18.onnx',
+    sizeBytes: 53_205_364,
+    // Verified locally 2026-11-09 against the HF LFS artifact.
+    sha256: '0d9bd318e46987c3bdbfacae9e2c0f461cae1c6ac6ea6d43bbe541a91727e33f',
+    license: 'MIT (jbrownkramer/face-parsing; upstream yakhyo/face-parsing, © Yakhyokhuja Valikhujaev)',
+    supportedBackends: ['webgpu', 'wasm'],
+    inputResolutions: [512],
+    quantization: 'fp32',
+    memoryMB: 256,
+    status: 'installable',
+    notes:
+      'Pinned for the hair-colour mask (2026-11-09). BiSeNet/ResNet18 trained on ' +
+      'CelebAMask-HQ label order: 0 bg, 1 skin, 2-3 brows, 4-5 eyes, 6 eye_g, ' +
+      '7-9 ears/earring, 10 nose, 11-13 mouth/lips, 14-15 neck, 16 cloth, ' +
+      '17 hair, 18 hat. Input [1,3,512,512] RGB ImageNet-normalised; use output ' +
+      '"output" [1,19,512,512]. Run on a face crop, not the full frame: on a ' +
+      'full-body photo the parser labels jacket/sunglasses as hat and misses ' +
+      'most hair. Python ORT CPU smoke 2026-11-09: 660-880px face crop -> clean ' +
+      'hair mask (58k px), ~0.15 s.',
+  },
+  {
     id: 'nafnet-gopro-w64',
     version: '0.0.0-unpinned',
     label: 'NAFNet GoPro width64 (restoration)',

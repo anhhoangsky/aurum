@@ -11,9 +11,14 @@ import { getModelDescriptor } from './registry';
 import { listInstalledModels, installModelBytes, loadModelBytes } from './cache';
 import { JobQueue } from './queue';
 import { planRetouch } from './memory';
-import { createSession, type RuntimeOptions } from './runtime';
+import { createSession, type LoadedSession, type RuntimeOptions } from './runtime';
 import { resizeMask, featherMask, type Mask } from './mask';
-import { blazefaceToTensor, decodeBlazeBoxes } from './models';
+import {
+  blazefaceToTensor,
+  decodeBlazeBoxes,
+  faceParsingToTensor,
+  faceParsingHairMask,
+} from './models';
 import { compositeWhitened } from './adapter';
 import type {
   AISource,
@@ -237,6 +242,104 @@ function buildHairMaskFromFaces(source: AISource, faces: RetouchFaceBox[], maxSi
   return featherMask({ width: w, height: h, data: out }, 2);
 }
 
+// Face-parsing works on a face crop, not the whole frame: on a full-body
+// portrait the face is too small for the 512² parser and it labels the jacket
+// and sunglasses as "hat" while missing most of the hair. Crop a generous
+// square around each face, parse it, and map the hair probability back into
+// source-mask space.
+const HAIR_PARSER_INPUT = 512;
+const HAIR_MASK_MAX = 1024;
+const HAIR_PARSER_MAX_FACES = 4;
+
+function hairFaceCrop(
+  face: RetouchFaceBox,
+  sw: number,
+  sh: number,
+): { x: number; y: number; side: number } | null {
+  if (!(face.w > 0 && face.h > 0)) return null;
+  const fw = face.w * sw;
+  const fh = face.h * sh;
+  const cx = (face.x + face.w * 0.5) * sw;
+  const cy = (face.y + face.h * 0.5) * sh;
+  // Head + hair is roughly 1.9 face-widths wide and 2.5 face-heights tall.
+  // Shift the square up so the crown is always inside the crop.
+  const side = Math.min(Math.max(fw * 1.9, fh * 2.5), sw, sh);
+  if (!(side >= 8)) return null;
+  const x = Math.min(Math.max(0, cx - side / 2), Math.max(0, sw - side));
+  const y = Math.min(Math.max(0, cy - fh * 0.32 - side / 2), Math.max(0, sh - side));
+  return { x, y, side };
+}
+
+async function parseHairMaskFromFaces(
+  source: AISource,
+  faces: RetouchFaceBox[],
+  loaded: LoadedSession,
+  signal?: AbortSignal,
+): Promise<Mask | null> {
+  const { width: sw, height: sh } = sourceSize(source);
+  const scale = Math.min(1, HAIR_MASK_MAX / Math.max(1, sw, sh));
+  const w = Math.max(1, Math.round(sw * scale));
+  const h = Math.max(1, Math.round(sh * scale));
+  const maskCanvas = canvasOf(w, h);
+  const mctx = maskCanvas.getContext('2d', { willReadFrequently: true });
+  if (!mctx) return null;
+  // Overlapping face crops merge with max(), never sum(), so a shared hair
+  // edge does not get brighter than 1.
+  mctx.globalCompositeOperation = 'lighten';
+  const inputCanvas = canvasOf(HAIR_PARSER_INPUT, HAIR_PARSER_INPUT);
+  const ictx = inputCanvas.getContext('2d');
+  const hairCanvas = canvasOf(HAIR_PARSER_INPUT, HAIR_PARSER_INPUT);
+  const hctx = hairCanvas.getContext('2d');
+  if (!ictx || !hctx) return null;
+
+  const ordered = [...faces]
+    .sort((a, b) => b.w * b.h - a.w * a.h)
+    .slice(0, HAIR_PARSER_MAX_FACES);
+  for (const face of ordered) {
+    signal?.throwIfAborted();
+    const crop = hairFaceCrop(face, sw, sh);
+    if (!crop) continue;
+    ictx.clearRect(0, 0, HAIR_PARSER_INPUT, HAIR_PARSER_INPUT);
+    ictx.imageSmoothingEnabled = true;
+    ictx.imageSmoothingQuality = 'high';
+    ictx.drawImage(
+      source,
+      crop.x, crop.y, crop.side, crop.side,
+      0, 0, HAIR_PARSER_INPUT, HAIR_PARSER_INPUT,
+    );
+    const tensor = faceParsingToTensor(loaded.module, inputCanvas);
+    const out = await loaded.session.run({ [loaded.session.inputNames[0]!]: tensor });
+    const raw = out[loaded.session.outputNames[0]!] ?? out['output'];
+    if (!raw) continue;
+    const probs = faceParsingHairMask(raw);
+    const rgba = new Uint8ClampedArray(HAIR_PARSER_INPUT * HAIR_PARSER_INPUT * 4);
+    for (let i = 0; i < probs.data.length; i++) {
+      const v = Math.round(Math.min(1, Math.max(0, probs.data[i] ?? 0)) * 255);
+      const j = i * 4;
+      rgba[j] = v; rgba[j + 1] = v; rgba[j + 2] = v; rgba[j + 3] = 255;
+    }
+    hctx.putImageData(new ImageData(rgba, HAIR_PARSER_INPUT, HAIR_PARSER_INPUT), 0, 0);
+    mctx.drawImage(
+      hairCanvas,
+      0, 0, HAIR_PARSER_INPUT, HAIR_PARSER_INPUT,
+      (crop.x * w) / sw, (crop.y * h) / sh,
+      (crop.side * w) / sw, (crop.side * h) / sh,
+    );
+  }
+
+  const rgba = mctx.getImageData(0, 0, w, h).data;
+  const data = new Float32Array(w * h);
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = (rgba[i * 4] ?? 0) / 255;
+    data[i] = v;
+    sum += v;
+  }
+  // Nothing recognised: let the caller fall back to the heuristic mask.
+  if (sum < Math.max(16, w * h * 0.0005)) return null;
+  return featherMask({ width: w, height: h, data }, 2);
+}
+
 class AurumRetouchImpl implements AurumRetouch {
   readonly quality: string;
   readonly backend: 'webgpu' | 'wasm';
@@ -421,7 +524,39 @@ class AurumRetouchImpl implements AurumRetouch {
       }
     }
     if (!faces.length) return failure(task, { code: 'invalid-input', message: 'Không nhận diện được mặt để lấy vùng tóc.' });
-    const hairMask = buildHairMaskFromFaces(source, faces);
+    let hairMask: Mask | null = null;
+    let maskModel = 'blazeface-onnx';
+    const parserDesc = getModelDescriptor('face-parsing-bisenet');
+    if (parserDesc && this.runtime && parserDesc.memoryMB <= this.device.memoryBudgetMB) {
+      const parserBytes = await loadModelBytes('face-parsing-bisenet');
+      if (!parserBytes) {
+        console.warn('[aurum-ai-retouch] face-parsing-bisenet is not installed; using the heuristic hair mask.');
+      } else {
+        this.onStatus?.('Hair parsing 512px (face crop)…');
+        options.onProgress?.('hair-parsing');
+        try {
+          const loaded = await createSession(
+            parserBytes,
+            { runtime: this.runtime, backend: this.backend, onStatus: this.onStatus },
+            options.signal,
+          );
+          try {
+            hairMask = await parseHairMaskFromFaces(source, faces, loaded, options.signal);
+          } finally {
+            await loaded.dispose();
+          }
+          if (hairMask) maskModel = 'face-parsing-bisenet';
+          else console.warn('[aurum-ai-retouch] face parser returned an empty hair mask; using the heuristic hair mask.');
+        } catch (e: any) {
+          if (e?.name === 'AbortError' || options.signal?.aborted) throw e;
+          // Some iPhone GPUs reject an op in this graph. Hair colour should
+          // still work approximately instead of failing the whole action.
+          console.warn('[aurum-ai-retouch] face-parsing inference failed, falling back to the heuristic hair mask:', e);
+        }
+      }
+    }
+    options.signal?.throwIfAborted();
+    if (!hairMask) hairMask = buildHairMaskFromFaces(source, faces);
     // Composite is unused by UI (procedural hue shift); supply a 1px-size copy
     // so callers can distinguish success. Real effect is computed in UI.
     return {
@@ -431,8 +566,8 @@ class AurumRetouchImpl implements AurumRetouch {
       landmarks,
       skinMask: { width: hairMask.width, height: hairMask.height, data: hairMask.data },
       metadata: {
-        modelId: 'blazeface-onnx',
-        modelVersion: getModelDescriptor('blazeface-onnx')?.version ?? '',
+        modelId: maskModel,
+        modelVersion: getModelDescriptor(maskModel)?.version ?? '',
         backend: this.backend,
         inferenceTime: performance.now() - started,
         faceCount: faces.length,

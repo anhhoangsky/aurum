@@ -1059,7 +1059,16 @@ export class AurumEditor extends AurumCore {
   private hairHue = 0;
   private hairColorId = 'brown';
   private brushMode: 'add' | 'erase' = 'add';
+  /** Inspect/pan mode inside the brush: gestures own input, no painting. */
   private brushZoom = false;
+  /**
+   * The current brush framing is a zoomed viewport the user chose. It is kept
+   * while switching Giữ/Xoá and while painting, and must never be re-baked —
+   * only leaving the brush restores the pre-brush framing.
+   */
+  private brushZoomFraming = false;
+  /** Auto-zoom only on the first entry; re-entering pan keeps the size. */
+  private brushZoomUsed = false;
   private brushSize = 7;
   private brushRingEl: HTMLElement | null = null;
   private brushPointer: { x: number; y: number } | null = null;
@@ -2355,32 +2364,23 @@ export class AurumEditor extends AurumCore {
     this.addBtn = addBtn;
     this.eraseBtn = eraseBtn;
     this.zoomBtn = zoomBtn;
-    const syncToolBtns = (): void => {
-      addBtn.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'add'));
-      eraseBtn.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'erase'));
-      zoomBtn.setAttribute('aria-pressed', String(this.brushZoom));
-      if (this.refineCanvas) this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
-      try {
-        this.gesture.setEnabled(this.brushZoom);
-      } catch {
-        // Headless/test harness without a gesture controller.
-      }
-      if (this.brushZoom) this.hideBrushRing();
-      this.updateBrushRing();
-    };
+    // The mask toolbar and the class-level sync must agree; keep one path.
     addBtn.addEventListener('click', () => {
-      this.setBrushZoom(false);
+      // Keep the zoomed framing: the user zoomed in to fix the mask at that
+      // size. Leaving inspect mode starts painting without resetting it.
+      this.brushZoom = false;
       this.brushMode = 'add';
-      syncToolBtns();
+      this.syncToolButtons();
+      this.syncBrushChrome();
     });
     eraseBtn.addEventListener('click', () => {
-      this.setBrushZoom(false);
+      this.brushZoom = false;
       this.brushMode = 'erase';
-      syncToolBtns();
+      this.syncToolButtons();
+      this.syncBrushChrome();
     });
     zoomBtn.addEventListener('click', () => {
       this.setBrushZoom(!this.brushZoom);
-      syncToolBtns();
     });
     modeSeg.append(addBtn, eraseBtn, zoomBtn);
     const quickRow = el('div', 'au-mask-quickrow');
@@ -2789,7 +2789,7 @@ export class AurumEditor extends AurumCore {
    * animating back from it, since those frames are not the edit.
    */
   private refreshRefineBake(): void {
-    if (!this.refineOn || this.brushZoom || this.brushRestoring) return;
+    if (!this.refineOn || this.brushZoomFraming || this.brushRestoring) return;
     const vp = this.viewport();
     const bake = this.savedBake;
     const sameViewport = bake
@@ -2929,10 +2929,13 @@ export class AurumEditor extends AurumCore {
 
   private syncBrushChrome(): void {
     const retouch = this.refineKind === 'retouch';
-    if (this.maskInvertBtn) this.maskInvertBtn.style.display = retouch || this.brushZoom ? 'none' : '';
-    if (this.maskTransparentBtn) this.maskTransparentBtn.style.display = retouch || this.brushZoom ? 'none' : '';
-    if (this.zoomInBtn) this.zoomInBtn.style.display = this.brushZoom ? '' : 'none';
-    if (this.zoomOutBtn) this.zoomOutBtn.style.display = this.brushZoom ? '' : 'none';
+    const paint = this.brushPaintEnabled;
+    // Mask-wide controls only make sense while the brush is painting. In
+    // inspect mode the toolbar is for panning/zooming, so hide them.
+    if (this.maskInvertBtn) this.maskInvertBtn.style.display = retouch || !paint ? 'none' : '';
+    if (this.maskTransparentBtn) this.maskTransparentBtn.style.display = retouch || !paint ? 'none' : '';
+    if (this.zoomInBtn) this.zoomInBtn.style.display = this.brushZoomFraming ? '' : 'none';
+    if (this.zoomOutBtn) this.zoomOutBtn.style.display = this.brushZoomFraming ? '' : 'none';
     if (this.whitenStrengthRow) this.whitenStrengthRow.style.display = retouch ? '' : 'none';
     if (this.hairRow) this.hairRow.style.display = retouch && this.retouchEffect === 'hair' ? '' : 'none';
     const auxFor = retouch && (this.retouchEffect === 'tone' || this.retouchEffect === 'hair');
@@ -2948,7 +2951,9 @@ export class AurumEditor extends AurumCore {
         this.auxTicks.set(this.toneWarm, false);
       }
     }
-    if (this.maskHintEl) this.maskHintEl.textContent = this.brushZoom ? this.s.zoomHint : (retouch ? this.s.retouchBrushHint : this.s.brushHint);
+    if (this.maskHintEl) this.maskHintEl.textContent = this.brushPaintEnabled
+      ? (retouch ? this.s.retouchBrushHint : this.s.brushHint)
+      : this.s.zoomHint;
     if (this.maskToolLabelEl) this.maskToolLabelEl.textContent = this.s.brushLabel;
     if (!retouch) this.syncMaskTransparentBtn();
   }
@@ -2976,7 +2981,7 @@ export class AurumEditor extends AurumCore {
 
   private updateBrushRing(): void {
     if (!this.brushRingEl) return;
-    if (!this.refineOn || (!this.brushPreview && this.brushZoom) || !this.brushPointer || !this.refineCanvas) {
+    if (!this.refineOn || (!this.brushPreview && !this.brushPaintEnabled) || !this.brushPointer || !this.refineCanvas) {
       this.brushRingEl.style.display = 'none';
       return;
     }
@@ -3034,14 +3039,14 @@ export class AurumEditor extends AurumCore {
     // so the photo cannot drift while painting. Zoom mode removes the hit
     // target (pointerEvents none) so stage gestures take over.
     c.dataset.gestureIgnore = 'true';
-    c.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
+    c.style.pointerEvents = this.brushPaintEnabled ? 'auto' : 'none';
     const ring = el('div', 'au-brush-ring au-mask-ring');
     ring.setAttribute('aria-hidden', 'true');
     this.stage.appendChild(ring);
     this.brushRingEl = ring;
     // pointer handlers for brush (Apple: 1:1, offset preserved, capture)
     const onDown = (e: PointerEvent) => {
-      if (!this.refineOn || this.brushZoom) return;
+      if (!this.refineOn || !this.brushPaintEnabled) return;
       e.preventDefault();
       try { c.setPointerCapture(e.pointerId); } catch {}
       if (this.refineMask) this.refineHistory.push(new Float32Array(this.refineMask));
@@ -3050,7 +3055,7 @@ export class AurumEditor extends AurumCore {
       this.brushAt(e);
     };
     const onMove = (e: PointerEvent) => {
-      if (this.brushZoom) return;
+      if (!this.brushPaintEnabled) return;
       // Hover ring for mouse (size preview before painting); touch paints.
       if (e.pointerType === 'mouse' && !this.refineStroke) {
         const stageRect = this.stage.getBoundingClientRect();
@@ -3075,62 +3080,60 @@ export class AurumEditor extends AurumCore {
     this.refineCanvas = c;
   }
 
+  /** Painting is active unless the zoom control is in inspect/pan mode. */
+  private get brushPaintEnabled(): boolean {
+    return !this.brushZoom;
+  }
+
   private syncToolButtons(): void {
-    this.addBtn?.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'add'));
-    this.eraseBtn?.setAttribute('aria-pressed', String(!this.brushZoom && this.brushMode === 'erase'));
+    const paint = this.brushPaintEnabled;
+    this.addBtn?.setAttribute('aria-pressed', String(paint && this.brushMode === 'add'));
+    this.eraseBtn?.setAttribute('aria-pressed', String(paint && this.brushMode === 'erase'));
     this.zoomBtn?.setAttribute('aria-pressed', String(this.brushZoom));
-    if (this.refineCanvas) this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
-    // Gestures are disabled outside Crop (resultMode). Zoom mode re-enables
-    // pan/pinch/wheel so the user can inspect mask detail; painting disables
-    // them again so a stroke cannot drift the photo.
+    if (this.refineCanvas) this.refineCanvas.style.pointerEvents = paint ? 'auto' : 'none';
+    // Gestures are disabled outside Crop (resultMode). Zoom inspect mode
+    // re-enables pan/pinch/wheel; painting disables them so a stroke cannot
+    // drift the photo, even when painting at a zoomed framing.
     try {
       this.gesture.setEnabled(this.brushZoom);
     } catch {
       // Headless/test harness without a gesture controller.
     }
-    if (this.brushZoom) this.hideBrushRing();
+    if (!paint) this.hideBrushRing();
     this.updateBrushRing();
   }
 
   private setBrushZoom(on: boolean): void {
-    // Entering zoom: the current framing is the one to come back to. Freeze it
-    // now, before the inspection settle, so panning around the mask can never
-    // leak into the bake.
-    if (on && !this.brushZoom) {
+    // First entry freezes the pre-brush framing and auto-zooms. Later visits
+    // to inspect mode keep the size the user already chose.
+    if (on && !this.brushZoomFraming) {
       this.savedBake = this.savedBake ?? this.captureRefineBake();
-      const t = this.getState().transform;
-      this.savedTransform = {
-        zoom: t.zoom,
-        offsetX: t.offsetX,
-        offsetY: t.offsetY,
-        rotation: t.rotation,
-      };
-    }
-    // Leaving zoom mode is not an edit: return to the pre-brush framing so the
-    // next stroke starts where the user left off and "Hoàn tất" bakes the crop
-    // the user actually chose, not the inspection viewport.
-    if (!on && this.brushZoom) {
-      this.brushRestoring = true;
-      this.restoreBrushFraming(true);
-      window.setTimeout(() => {
-        this.brushRestoring = false;
-        if (this.refineOn && !this.brushZoom) this.refreshRefineBake();
-      }, 340);
-    }
-    this.brushZoom = on;
-    // Auto-zoom on entry so iPhone users see the mode engage; pan/pinch then
-    // work around the zoomed image. At fit-zoom pan alone shows nothing.
-    if (on && this.isReady) {
-      const z = this.getState().transform.zoom;
-      if (z < 1.4) {
-        try {
-          this.settle({ zoom: Math.min(this.maxZoom, z * 1.8) }, 300);
-        } catch {
-          try { this.applyTransform({ zoom: Math.min(this.maxZoom, z * 1.8) }); } catch { // ignore
+      if (!this.savedTransform) {
+        const t = this.getState().transform;
+        this.savedTransform = {
+          zoom: t.zoom,
+          offsetX: t.offsetX,
+          offsetY: t.offsetY,
+          rotation: t.rotation,
+        };
+      }
+      this.brushZoomFraming = true;
+      // Auto-zoom on the first entry so iPhone users see the mode engage;
+      // pan/pinch then work around the zoomed image.
+      if (!this.brushZoomUsed && this.isReady) {
+        this.brushZoomUsed = true;
+        const z = this.getState().transform.zoom;
+        if (z < 1.4) {
+          try {
+            this.settle({ zoom: Math.min(this.maxZoom, z * 1.8) }, 300);
+          } catch {
+            try { this.applyTransform({ zoom: Math.min(this.maxZoom, z * 1.8) }); } catch { // ignore
+            }
           }
         }
       }
     }
+    this.brushZoom = on;
     this.syncToolButtons();
     this.syncBrushChrome();
   }
@@ -3147,7 +3150,7 @@ export class AurumEditor extends AurumCore {
       // before the first paint, so re-capture once the layout has settled —
       // otherwise the pre-layout mapping would bake a cropped-in view.
       requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (!this.refineOn || this.brushZoom || !this.savedTransform) return;
+        if (!this.refineOn || this.brushZoomFraming || !this.savedTransform) return;
         this.captureBrushFraming();
       }));
     }
@@ -3156,9 +3159,11 @@ export class AurumEditor extends AurumCore {
     // appear offset at the edges when zoomed — only the brush preview shows.
     this.canvas.style.visibility = 'hidden';
     this.brushZoom = false;
+    this.brushZoomFraming = false;
+    this.brushZoomUsed = false;
     this.syncToolButtons();
     this.refineCanvas.style.display = 'block';
-    this.refineCanvas.style.pointerEvents = this.brushZoom ? 'none' : 'auto';
+    this.refineCanvas.style.pointerEvents = this.brushPaintEnabled ? 'auto' : 'none';
     this.maskToolbar.style.display = 'block';
     // Hide model + action list while refining (dock becomes mask tools only)
     for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
@@ -3206,13 +3211,13 @@ export class AurumEditor extends AurumCore {
     this.refineMaskWidth = mw; this.refineMaskHeight = mh;
     this.refineMask = new Float32Array(mask);
     this.refineOriginalMask = new Float32Array(mask);
-    this.refineModelId = 'blazeface-onnx';
+    this.refineModelId = effect === 'hair' ? 'face-parsing-bisenet' : 'blazeface-onnx';
     this.refineHistory = [];
     this.showBrush();
   }
 
   private brushAt(e: PointerEvent): void {
-    if (!this.refineCanvas || !this.refineMask || this.brushZoom) return;
+    if (!this.refineCanvas || !this.refineMask || !this.brushPaintEnabled) return;
     const rect = this.refineCanvas.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return;
     const stageRect = this.stage.getBoundingClientRect();
@@ -3327,26 +3332,45 @@ export class AurumEditor extends AurumCore {
     }
   }
 
-  private cancelRefine(): void {
+  /**
+   * Close the brush. `restoreFraming` is false when applying: `load()` fits the
+   * new bitmap, so animating back to the pre-brush view would only fight it.
+   */
+  private cancelRefine(restoreFraming = true): void {
     this.refineOn = false;
     this.refineKind = 'bg';
     this.refineWhitened = null;
     this.refineMask = null;
     this.refineHistory = [];
     this.brushZoom = false;
+    this.brushZoomFraming = false;
+    this.brushZoomUsed = false;
     this.brushRestoring = false;
     this.syncToolButtons();
     this.hideBrushRing();
     this.canvas.style.visibility = '';
-    // Inspection zoom is not an edit — restore the framing from before the brush.
-    this.restoreBrushFraming(true);
-    this.savedBake = null;
     if (this.refineCanvas) this.refineCanvas.style.display = 'none';
     if (this.maskToolbar) this.maskToolbar.style.display = 'none';
     for (const el of [this.bgModelLabelEl, this.bgModelSegEl, this.bgModelDetail, this.bgListEl]) {
       if (el) el.style.display = '';
     }
     this.positionTexts();
+    // Hide the brush dock BEFORE restoring: the mask toolbar is a different
+    // height than the AI panel, so restoring first would remap the saved zoom
+    // against the wrong (still-shrunken) viewport. One synchronous paint syncs
+    // the core's viewport baseline as well, so the ResizeObserver pass that
+    // follows cannot remap the restored zoom a second time.
+    try {
+      this.renderNow();
+    } catch {
+      // Headless/test harness without a render host.
+    }
+    if (restoreFraming) {
+      // Inspection zoom/pan is not an edit — return to the pre-brush framing.
+      this.restoreBrushFraming(true);
+    }
+    this.savedTransform = null;
+    this.savedBake = null;
   }
 
   private async applyRefine(): Promise<void> {
@@ -3355,8 +3379,8 @@ export class AurumEditor extends AurumCore {
     // brush entry and apply (dock/layout changes); recomputing from the live
     // view would then bake a smaller crop than the user selected. Inspection
     // zoom is also excluded here by design: the bake is captured before it.
+    // The view is restored (or not) by cancelRefine below.
     const bake = this.savedBake;
-    this.restoreBrushFraming(false);
     const frame = bake?.frame ?? this.displayCropRect();
     if (!frame) return;
     const size = bake ? { w: bake.w, h: bake.h } : this.refineOutputSize(frame);
@@ -3402,7 +3426,7 @@ export class AurumEditor extends AurumCore {
     // filter/adjust the user applied before the brush stays on top of the
     // baked result (framing stays fitted to the new bitmap).
     const keep = this.getState();
-    this.cancelRefine();
+    this.cancelRefine(false);
     await this.load(blob);
     try {
       this.setState({ ...keep, transform: this.getState().transform, crop: this.getState().crop }, { history: true });

@@ -457,9 +457,9 @@ let retouchEnginePromise = null;
 
 async function getRetouchEngine(context) {
   if (!retouchEnginePromise) {
-    context?.report?.(-1, 'Đang khởi tạo AI retouch (BlazeFace)…');
+    context?.report?.(-1, 'Đang khởi tạo AI retouch…');
     retouchEnginePromise = (async () => {
-      const mod = await import(trustedScriptUrl('./assets/aurum-ai-retouch.esm.js?v=2'));
+      const mod = await import(trustedScriptUrl('./assets/aurum-ai-retouch.esm.js?v=3'));
       const engine = await mod.create({
         offline: true,
         quality: 'medium',
@@ -479,25 +479,42 @@ async function runRetouch(editor, context, mode) {
   if (!source) throw new Error('Chưa có ảnh');
   const { engine } = await getRetouchEngine(context);
   const installed = (await engine.getInstalledModels().catch(() => [])).map((m) => m.id);
+  const modelNames = {
+    'blazeface-onnx': 'BlazeFace (nhận diện mặt, 0.5 MB)',
+    'face-parsing-bisenet': 'Face Parsing (vùng tóc, 53 MB)',
+  };
   const ensure = async (id) => {
     if (installed.includes(id)) return;
-    context?.report?.(-1, `Đang tải model ${id} (1 lần, kiểm tra SHA-256)…`);
+    const name = modelNames[id] || id;
+    context?.report?.(-1, `Đang tải ${name} (1 lần, kiểm tra SHA-256)…`);
     try {
       await engine.installModel(id, '', context?.signal);
     } catch (e) {
+      if (e?.name === 'AbortError' || context?.signal?.aborted) throw e;
       console.error(`[aurum] installModel ${id} failed:`, e);
-      throw new Error(`Tải BlazeFace lỗi: ${e?.message || e} (kiểm tra mạng, tải lại)`);
+      throw new Error(`Tải ${name} lỗi: ${e?.message || e} (kiểm tra mạng, tải lại)`);
     }
     installed.push(id);
   };
   await ensure('blazeface-onnx');
+  if (mode === 'hair') {
+    // BiSeNet face parsing is the accurate hair path. If its first download
+    // fails, keep hair colour usable with the engine's heuristic fallback.
+    try {
+      await ensure('face-parsing-bisenet');
+    } catch (e) {
+      if (e?.name === 'AbortError' || context?.signal?.aborted) throw e;
+      console.warn('[aurum] hair parser unavailable, falling back to heuristic mask:', e);
+      context?.report?.(-1, 'Không tải được model tách tóc — dùng vùng tóc ước lượng…');
+    }
+  }
   let result;
   const labels = {
     whiten: 'Đang trắng da AI (BlazeFace + Retinex, offline)…',
     smooth: 'Đang phân tích da để mịn (offline)…',
     blemish: 'Đang chuẩn bị cọ xoá mụn (offline)…',
     tone: 'Đang phân tích tông da (offline)…',
-    hair: 'Đang lấy vùng tóc (offline)…',
+    hair: 'Đang tách vùng tóc (Face Parsing 512, offline)…',
   };
   context?.report?.(-1, labels[mode] || 'Đang retouch AI (offline)…');
   try {
@@ -512,7 +529,7 @@ async function runRetouch(editor, context, mode) {
   }
   if (!result?.success) {
     console.error('[aurum] retouch result:', result?.error);
-    throw new Error(result?.error?.message || 'AI retouch chưa sẵn sàng (chưa cài BlazeFace?)');
+    throw new Error(result?.error?.message || 'AI retouch chưa sẵn sàng (kiểm tra model đã tải)');
   }
   // For blemish, start from an empty mask so the user paints spots to heal.
   if (mode === 'blemish' && result.skinMask) {
