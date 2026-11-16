@@ -155,8 +155,43 @@ export interface LiquifyDab {
   radius: number;
 }
 
+/** Mask-driven region effects painted in source UV space. */
+export type EffectKind = 'mosaic' | 'blur';
+
+/**
+ * One brush stamp of a region effect. `radius` is width-normalised, exactly
+ * like a liquify dab, so a stroke keeps its size at preview and export.
+ */
+export interface EffectDab {
+  kind: EffectKind;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+/**
+ * Painted region effects. `size` and `strength` are the live brush settings,
+ * not per-dab values: changing them re-scales the mask grid and blend for the
+ * whole region, the way a mosaic-size slider behaves in the reference app.
+ */
+export interface EffectState {
+  dabs: EffectDab[];
+  /** Brush radius as a fraction of the source width, 0.01..0.2. */
+  size: number;
+  /** Blend strength 0..100. */
+  strength: number;
+}
+
 export interface RetouchState {
   liquify: LiquifyDab[];
+  effects?: EffectState;
+}
+
+/** Small RGBA8 region mask; R = mosaic, G = blur. */
+export interface EffectMask {
+  width: number;
+  height: number;
+  data: Uint8Array;
 }
 
 /** Small RGBA8 displacement texture; RG = signed source-UV offset. */
@@ -455,6 +490,14 @@ export interface EnhanceSpec {
   mask: BeautyMask | null;
   /** Optional liquify displacement field. */
   liquify: LiquifyField | null;
+  /** Optional painted region-effect mask (R mosaic, G blur). */
+  effects: EffectMask | null;
+  /** Region-effect blend strength, 0..1. */
+  effectStrength: number;
+  /** Mosaic grid counts across the source image. */
+  effectGrid: [number, number];
+  /** Blur radius in image-UV units, per axis, aspect corrected. */
+  effectBlur: [number, number];
   /** 1 = hybrid linear-light pipeline, 0 = legacy sRGB pipeline. */
   linear: number;
   /** 0..1 output dither strength. */

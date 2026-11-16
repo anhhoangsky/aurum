@@ -34,6 +34,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;
@@ -293,6 +297,30 @@ return bayer2(0.5 * a) * 0.25 + bayer2(a);
 void main() {
 vec2 uv = warpFace(v_uv);
 vec4 texel = texture2D(u_texture, uv);
+if (u_effectStrength > 0.0001) {
+vec3 effected = texel.rgb;
+vec4 region = texture2D(u_effectMask, uv);
+if (region.r > 0.001) {
+vec2 cell = floor(uv * u_effectGrid) + 0.5;
+vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+effected = mix(effected, block, region.r * u_effectStrength);
+}
+if (region.g > 0.001) {
+vec2 ox = vec2(u_effectBlur.x, 0.0);
+vec2 oy = vec2(0.0, u_effectBlur.y);
+vec3 sum = texel.rgb;
+sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+}
+texel.rgb = effected;
+}
 vec3 c = texel.rgb;
 float lc = luma(c);
 if (u_denoise > 0.001) {
@@ -517,6 +545,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;
@@ -776,6 +808,30 @@ return bayer2(0.5 * a) * 0.25 + bayer2(a);
 void main() {
 vec2 uv = warpFace(v_uv);
 vec4 texel = texture2D(u_texture, uv);
+if (u_effectStrength > 0.0001) {
+vec3 effected = texel.rgb;
+vec4 region = texture2D(u_effectMask, uv);
+if (region.r > 0.001) {
+vec2 cell = floor(uv * u_effectGrid) + 0.5;
+vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+effected = mix(effected, block, region.r * u_effectStrength);
+}
+if (region.g > 0.001) {
+vec2 ox = vec2(u_effectBlur.x, 0.0);
+vec2 oy = vec2(0.0, u_effectBlur.y);
+vec3 sum = texel.rgb;
+sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+}
+texel.rgb = effected;
+}
 vec3 c = texel.rgb;
 float lc = luma(c);
 if (u_denoise > 0.001) {
@@ -1001,6 +1057,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;
@@ -1260,6 +1320,30 @@ return bayer2(0.5 * a) * 0.25 + bayer2(a);
 void main() {
 vec2 uv = warpFace(v_uv);
 vec4 texel = texture2D(u_texture, uv);
+if (u_effectStrength > 0.0001) {
+vec3 effected = texel.rgb;
+vec4 region = texture2D(u_effectMask, uv);
+if (region.r > 0.001) {
+vec2 cell = floor(uv * u_effectGrid) + 0.5;
+vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+effected = mix(effected, block, region.r * u_effectStrength);
+}
+if (region.g > 0.001) {
+vec2 ox = vec2(u_effectBlur.x, 0.0);
+vec2 oy = vec2(0.0, u_effectBlur.y);
+vec3 sum = texel.rgb;
+sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+}
+texel.rgb = effected;
+}
 vec3 c = texel.rgb;
 float lc = luma(c);
 if (u_denoise > 0.001) {
@@ -1486,6 +1570,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;
@@ -1745,6 +1833,30 @@ return bayer2(0.5 * a) * 0.25 + bayer2(a);
 void main() {
 vec2 uv = warpFace(v_uv);
 vec4 texel = texture2D(u_texture, uv);
+if (u_effectStrength > 0.0001) {
+vec3 effected = texel.rgb;
+vec4 region = texture2D(u_effectMask, uv);
+if (region.r > 0.001) {
+vec2 cell = floor(uv * u_effectGrid) + 0.5;
+vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+effected = mix(effected, block, region.r * u_effectStrength);
+}
+if (region.g > 0.001) {
+vec2 ox = vec2(u_effectBlur.x, 0.0);
+vec2 oy = vec2(0.0, u_effectBlur.y);
+vec3 sum = texel.rgb;
+sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+}
+texel.rgb = effected;
+}
 vec3 c = texel.rgb;
 float lc = luma(c);
 if (u_denoise > 0.001) {
@@ -1969,6 +2081,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;
@@ -2228,6 +2344,30 @@ return bayer2(0.5 * a) * 0.25 + bayer2(a);
 void main() {
 vec2 uv = warpFace(v_uv);
 vec4 texel = texture2D(u_texture, uv);
+if (u_effectStrength > 0.0001) {
+vec3 effected = texel.rgb;
+vec4 region = texture2D(u_effectMask, uv);
+if (region.r > 0.001) {
+vec2 cell = floor(uv * u_effectGrid) + 0.5;
+vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+effected = mix(effected, block, region.r * u_effectStrength);
+}
+if (region.g > 0.001) {
+vec2 ox = vec2(u_effectBlur.x, 0.0);
+vec2 oy = vec2(0.0, u_effectBlur.y);
+vec3 sum = texel.rgb;
+sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+}
+texel.rgb = effected;
+}
 vec3 c = texel.rgb;
 float lc = luma(c);
 if (u_denoise > 0.001) {
@@ -2453,6 +2593,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;
@@ -2712,6 +2856,30 @@ return bayer2(0.5 * a) * 0.25 + bayer2(a);
 void main() {
 vec2 uv = warpFace(v_uv);
 vec4 texel = texture2D(u_texture, uv);
+if (u_effectStrength > 0.0001) {
+vec3 effected = texel.rgb;
+vec4 region = texture2D(u_effectMask, uv);
+if (region.r > 0.001) {
+vec2 cell = floor(uv * u_effectGrid) + 0.5;
+vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+effected = mix(effected, block, region.r * u_effectStrength);
+}
+if (region.g > 0.001) {
+vec2 ox = vec2(u_effectBlur.x, 0.0);
+vec2 oy = vec2(0.0, u_effectBlur.y);
+vec3 sum = texel.rgb;
+sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+}
+texel.rgb = effected;
+}
 vec3 c = texel.rgb;
 float lc = luma(c);
 if (u_denoise > 0.001) {
@@ -2936,6 +3104,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;
@@ -3195,6 +3367,30 @@ return bayer2(0.5 * a) * 0.25 + bayer2(a);
 void main() {
 vec2 uv = warpFace(v_uv);
 vec4 texel = texture2D(u_texture, uv);
+if (u_effectStrength > 0.0001) {
+vec3 effected = texel.rgb;
+vec4 region = texture2D(u_effectMask, uv);
+if (region.r > 0.001) {
+vec2 cell = floor(uv * u_effectGrid) + 0.5;
+vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+effected = mix(effected, block, region.r * u_effectStrength);
+}
+if (region.g > 0.001) {
+vec2 ox = vec2(u_effectBlur.x, 0.0);
+vec2 oy = vec2(0.0, u_effectBlur.y);
+vec3 sum = texel.rgb;
+sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+}
+texel.rgb = effected;
+}
 vec3 c = texel.rgb;
 float lc = luma(c);
 if (u_denoise > 0.001) {
@@ -3420,6 +3616,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;
@@ -3679,6 +3879,30 @@ return bayer2(0.5 * a) * 0.25 + bayer2(a);
 void main() {
 vec2 uv = warpFace(v_uv);
 vec4 texel = texture2D(u_texture, uv);
+if (u_effectStrength > 0.0001) {
+vec3 effected = texel.rgb;
+vec4 region = texture2D(u_effectMask, uv);
+if (region.r > 0.001) {
+vec2 cell = floor(uv * u_effectGrid) + 0.5;
+vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+effected = mix(effected, block, region.r * u_effectStrength);
+}
+if (region.g > 0.001) {
+vec2 ox = vec2(u_effectBlur.x, 0.0);
+vec2 oy = vec2(0.0, u_effectBlur.y);
+vec3 sum = texel.rgb;
+sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+}
+texel.rgb = effected;
+}
 vec3 c = texel.rgb;
 float lc = luma(c);
 if (u_denoise > 0.001) {

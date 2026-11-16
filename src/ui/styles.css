@@ -355,7 +355,10 @@
 .au-tab{
   position:relative;display:flex;flex:1 1 0;flex-direction:column;align-items:center;
   justify-content:center;gap:2px;height:40px;border-radius:13px;
-  color:var(--au-muted);font-size:10px;font-weight:600;letter-spacing:.2px;
+  /* Seven tabs have to share a 390 px phone: 9 px keeps every Vietnamese label
+     on one line at 390 px, and nowrap stops a label from wrapping mid-word. */
+  color:var(--au-muted);font-size:9px;font-weight:600;letter-spacing:.2px;
+  white-space:nowrap;
   transition:color .16s ease,background .16s ease;
 }
 .au-tab svg{width:20px;height:20px;display:block}
@@ -504,6 +507,11 @@
   align-items:center;justify-content:center;flex:0 0 auto;
 }
 .au-liquify-row .au-reset{width:40px;height:40px;flex-basis:40px}
+.au-effect-kinds{flex:1 1 auto;width:auto;min-width:0}
+.au-effect-hint{
+  margin:0 0 2px;padding:0 2px;color:var(--au-muted);
+  font-size:11px;line-height:1.35;
+}
 .au-brush-ring{
   position:absolute;left:0;top:0;z-index:2;display:none;border-radius:50%;
   border:1.5px solid rgba(255,255,255,.92);pointer-events:none;
@@ -817,6 +825,7 @@
   .au-top__ai span{display:none}
   .au-top__ai{width:30px;padding:0}
   .au-top__row--tools{gap:4px}
+  .au-tab{font-size:8.5px;letter-spacing:.1px}
 }
 @media (max-height:560px){
   /* Short screens: keep both export actions visible without scrolling. */

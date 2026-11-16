@@ -15,6 +15,10 @@ uniform float u_hasMask;
 uniform sampler2D u_liquify;
 uniform float u_liquifyShift;
 #endif
+uniform sampler2D u_effectMask;
+uniform float u_effectStrength;
+uniform vec2 u_effectGrid;
+uniform vec2 u_effectBlur;
 uniform mat3 u_color;
 uniform vec3 u_offset;
 uniform float u_vignette;

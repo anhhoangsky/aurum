@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum region effects UI test</title>
+<style>
+  body { margin: 0; padding: 12px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  #host { width: 390px; height: 640px; position: relative; background: #000; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<pre id="log">Running…</pre>
+<script type="module">
+import { createEditor } from './dist/aurum.esm.js?v=20261116d';
+
+const log = document.getElementById('log');
+const lines = [];
+let pass = 0;
+let fail = 0;
+
+function out(s) {
+  lines.push(s);
+  log.textContent = lines.join('\n');
+}
+function ok(label, condition, detail = '') {
+  if (condition) {
+    pass += 1;
+    out(`PASS ${label}${detail ? ` — ${detail}` : ''}`);
+  } else {
+    fail += 1;
+    out(`FAIL ${label}${detail ? ` — ${detail}` : ''}`);
+  }
+}
+
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+function sourceCanvas() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1d2a33';
+  ctx.fillRect(0, 0, 512, 512);
+  ctx.fillStyle = '#c98f6b';
+  ctx.beginPath();
+  ctx.ellipse(256, 256, 92, 113, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#6f6330';
+  for (let i = 0; i <= 512; i += 16) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i, 512);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i);
+    ctx.lineTo(512, i);
+    ctx.stroke();
+  }
+  return canvas;
+}
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 4) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = a[i + k] - b[i + k];
+      sum += d * d;
+      max = Math.max(max, Math.abs(d));
+    }
+  }
+  const mse = sum / (n * 0.75);
+  return { mse, max, psnr: mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse) };
+}
+
+const settle = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
+
+try {
+  const editor = createEditor({
+    container: '#host',
+    image: sourceCanvas(),
+    locale: 'en',
+    startTab: 'adjust',
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await new Promise((resolve) => {
+    if (editor.isReady) resolve();
+    else editor.on('ready', resolve);
+  });
+  await settle(300);
+
+  editor.showTab('effect');
+  await settle(120);
+
+  const root = document.querySelector('#host .au-root');
+  const tab = document.querySelector('#host .au-tab[aria-controls$="-pane-effect"]');
+  const pane = document.querySelector('#host .au-pane.is-active');
+  const chips = pane ? Array.from(pane.querySelectorAll('.au-effect-kinds .au-chip')) : [];
+  const brush = pane ? pane.querySelector('.au-param--liquify') : null;
+  const rails = pane ? Array.from(pane.querySelectorAll('.au-ticks')) : [];
+  const clear = pane ? pane.querySelector('.au-reset') : null;
+  const stage = document.querySelector('#host .au-stage');
+
+  ok('effect tab exists and is selected',
+    !!tab && tab.getAttribute('aria-selected') === 'true', tab ? tab.textContent : 'missing');
+  ok('pane offers mosaic and blur', chips.length === 2,
+    chips.map((chip) => chip.textContent).join(', '));
+  ok('pane offers the brush and two rails',
+    !!brush && rails.length === 2 && !!clear,
+    `rails=${rails.map((rail) => rail.getAttribute('aria-label')).join(', ')}`);
+
+  const neutral = await readBlob(await editor.export({ type: 'image/png', tileSize: 512 }));
+
+  chips[0].click();
+  await settle(80);
+  ok('picking a style arms the brush',
+    brush.getAttribute('aria-pressed') === 'true' &&
+    root.classList.contains('au-effect') &&
+    stage.style.cursor === 'crosshair',
+    `pressed=${brush.getAttribute('aria-pressed')} cursor=${stage.style.cursor}`);
+
+  const rect = stage.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const pointer = (type, x, y) => stage.dispatchEvent(new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerId: 7,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: type === 'pointerup' ? 0 : 1,
+    clientX: x,
+    clientY: y,
+  }));
+
+  pointer('pointerdown', cx - 40, cy);
+  for (let i = 1; i <= 8; i += 1) pointer('pointermove', cx - 40 + i * 10, cy);
+  pointer('pointerup', cx + 40, cy);
+  await settle(300);
+
+  const dabs = editor.getEffects();
+  ok('one stroke records mosaic dabs', dabs.length > 0 && dabs.every((dab) => dab.kind === 'mosaic'),
+    `count=${dabs.length} first=${dabs[0] ? dabs[0].radius.toFixed(3) : 'n/a'}`);
+  ok('default brush radius is 8 % of width',
+    dabs.length > 0 && Math.abs(dabs[0].radius - 0.08) < 0.001,
+    dabs[0] ? String(dabs[0].radius) : 'n/a');
+
+  const painted = await readBlob(await editor.export({ type: 'image/png', tileSize: 512 }));
+  const paintedDiff = psnr(painted.data, neutral.data);
+  ok('the stroke changes exported pixels', paintedDiff.psnr < 40,
+    `PSNR=${paintedDiff.psnr.toFixed(2)} dB max=${paintedDiff.max}`);
+
+  editor.undo();
+  await settle(250);
+  const undone = await readBlob(await editor.export({ type: 'image/png', tileSize: 512 }));
+  const undoDiff = psnr(undone.data, neutral.data);
+  ok('undo removes the whole stroke', undoDiff.psnr === Infinity && editor.getEffects().length === 0,
+    `PSNR=${undoDiff.psnr.toFixed(2)} dabs=${editor.getEffects().length}`);
+
+  rails[0].focus();
+  rails[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+  rails[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+  await settle(80);
+  ok('size ruler writes the shared state',
+    Math.abs(editor.getState().retouch.effects.size - 0.1) < 0.001,
+    String(editor.getState().retouch.effects.size));
+
+  rails[1].focus();
+  rails[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }));
+  await settle(80);
+  ok('strength ruler writes the shared state',
+    Math.abs(editor.getState().retouch.effects.strength - 59) < 0.001,
+    String(editor.getState().retouch.effects.strength));
+
+  chips[1].click();
+  await settle(80);
+  ok('switching style keeps the brush on', brush.getAttribute('aria-pressed') === 'true');
+
+  pointer('pointerdown', cx, cy - 30);
+  for (let i = 1; i <= 6; i += 1) pointer('pointermove', cx, cy - 30 + i * 10);
+  pointer('pointerup', cx, cy + 30);
+  await settle(300);
+  const mixed = editor.getEffects();
+  ok('a second stroke records blur dabs',
+    mixed.length > 0 && mixed.every((dab) => dab.kind === 'blur'),
+    `count=${mixed.length}`);
+
+  clear.click();
+  await settle(250);
+  const cleared = await readBlob(await editor.export({ type: 'image/png', tileSize: 512 }));
+  const clearDiff = psnr(cleared.data, neutral.data);
+  ok('clear button wipes every stroke', clearDiff.psnr === Infinity && editor.getEffects().length === 0,
+    `PSNR=${clearDiff.psnr.toFixed(2)} dabs=${editor.getEffects().length}`);
+
+  editor.showTab('crop');
+  await settle(100);
+  ok('leaving the tab disarms the brush',
+    brush.getAttribute('aria-pressed') === 'false' && !root.classList.contains('au-effect'),
+    `pressed=${brush.getAttribute('aria-pressed')}`);
+
+  out(`\n${pass} passed, ${fail} failed`);
+  out(fail === 0 ? 'ALL PASS' : 'FAILURES');
+  editor.destroy();
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+}
+</script>
+</body>
+</html>

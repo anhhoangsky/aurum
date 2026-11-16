@@ -2,6 +2,7 @@ import { AurumCore, type AurumCoreOptions } from '../core/core';
 import type {
   Adjustments,
   AspectId,
+  EffectKind,
   ExportMime,
   ExportProgress,
   FrameRect,
@@ -38,7 +39,7 @@ interface ChainPreset {
 
 const CHAIN_PRESETS = (portraitPresets as unknown as { presets: ChainPreset[] }).presets;
 
-export type TabId = 'crop' | 'adjust' | 'portrait' | 'filter' | 'text' | 'ai';
+export type TabId = 'crop' | 'adjust' | 'portrait' | 'effect' | 'filter' | 'text' | 'ai';
 export type CropMode = 'ratio' | 'rotation' | 'perspectiveY' | 'perspectiveX';
 export type Locale = 'vi' | 'en';
 
@@ -57,6 +58,7 @@ const STRINGS = {
     tabCrop: 'Cắt',
     tabAdjust: 'Tinh chỉnh',
     tabPortrait: 'Chân dung',
+    tabEffect: 'Hiệu ứng',
     tabFilter: 'Bộ lọc',
     aspect: 'Tỷ lệ khung',
     ratioLabel: 'Tỷ lệ',
@@ -70,6 +72,14 @@ const STRINGS = {
     reset: 'Đặt lại',
     adjustTitle: 'Tinh chỉnh',
     portraitTitle: 'Chân dung',
+    effectTitle: 'Hiệu ứng vùng',
+    effectMosaic: 'Mosaic',
+    effectBlur: 'Làm mờ',
+    effectBrush: 'Cọ hiệu ứng',
+    effectSize: 'Cỡ cọ',
+    effectStrength: 'Độ mạnh',
+    effectClear: 'Xóa hiệu ứng',
+    effectHint: 'Chọn kiểu rồi kéo lên ảnh. Mỗi nét là một bước hoàn tác.',
     brightness: 'Độ sáng',
     contrast: 'Độ tương phản',
     saturation: 'Độ bão hòa',
@@ -302,6 +312,8 @@ const STRINGS = {
     openImage: 'Open image',
     tabCrop: 'Crop',
     tabAdjust: 'Adjust',
+    tabPortrait: 'Portrait',
+    tabEffect: 'Effects',
     tabFilter: 'Filters',
     aspect: 'Aspect ratio',
     ratioLabel: 'Ratio',
@@ -314,6 +326,14 @@ const STRINGS = {
     rotation: 'Rotation',
     reset: 'Reset',
     adjustTitle: 'Adjust',
+    effectTitle: 'Region effects',
+    effectMosaic: 'Mosaic',
+    effectBlur: 'Blur',
+    effectBrush: 'Effect brush',
+    effectSize: 'Brush size',
+    effectStrength: 'Strength',
+    effectClear: 'Clear effects',
+    effectHint: 'Pick a style, then drag on the photo. Each stroke is one undo step.',
     brightness: 'Brightness',
     contrast: 'Contrast',
     saturation: 'Saturation',
@@ -738,6 +758,7 @@ interface CropDrag {
 const TABS: { id: TabId; icon: IconName; label: keyof UIStrings }[] = [
   { id: 'adjust', icon: 'adjust', label: 'tabAdjust' },
   { id: 'portrait', icon: 'portrait', label: 'tabPortrait' },
+  { id: 'effect', icon: 'effect', label: 'tabEffect' },
   { id: 'filter', icon: 'filter', label: 'tabFilter' },
   { id: 'text', icon: 'text', label: 'tabText' },
   { id: 'ai', icon: 'wand', label: 'tabAi' },
@@ -1180,6 +1201,23 @@ export class AurumEditor extends AurumCore {
     u: number;
     v: number;
   } | null = null;
+  private effectOn = false;
+  private effectKind: EffectKind = 'mosaic';
+  private effectSize = 8;
+  private effectStrength = 60;
+  private effectGesture = 0;
+  private effectButton: HTMLButtonElement | null = null;
+  private effectKindButtons = new Map<EffectKind, HTMLButtonElement>();
+  private effectSizeTicks: TickControl | null = null;
+  private effectSizeValue: HTMLButtonElement | null = null;
+  private effectStrengthTicks: TickControl | null = null;
+  private effectStrengthValue: HTMLButtonElement | null = null;
+  private effectStroke: {
+    pointerId: number;
+    key: string;
+    x: number;
+    y: number;
+  } | null = null;
   private saving = false;
   private autoBusy = false;
   private uiDestroyed = false;
@@ -1546,6 +1584,7 @@ export class AurumEditor extends AurumCore {
       if (tab.id === 'crop') this.buildCropPane(pane);
       if (tab.id === 'adjust') this.buildAdjustPane(pane);
       if (tab.id === 'portrait') this.buildPortraitPane(pane);
+      if (tab.id === 'effect') this.buildEffectPane(pane);
       if (tab.id === 'filter') this.buildFilterPane(pane);
       if (tab.id === 'text') this.buildTextPane(pane);
       if (tab.id === 'ai') this.buildAIPane(pane);
@@ -1823,6 +1862,169 @@ export class AurumEditor extends AurumCore {
       lead: presets,
       liquify: true,
     });
+  }
+
+  /**
+   * Region effects: pick mosaic or blur, then paint on the photo. The mask is
+   * rasterised in source UV, so a stroke survives crop and lands on the same
+   * pixels in the export. Size and strength are live globals, matching the
+   * reference app's "mosaic size" behaviour rather than per-stamp values.
+   */
+  private buildEffectPane(pane: HTMLElement): void {
+    const top = el('div', 'au-deck__row au-deck__row--top');
+    const kinds = el('div', 'au-chips au-effect-kinds');
+    kinds.setAttribute('role', 'group');
+    kinds.setAttribute('aria-label', this.s.effectTitle);
+    const defs: { id: EffectKind; label: keyof UIStrings }[] = [
+      { id: 'mosaic', label: 'effectMosaic' },
+      { id: 'blur', label: 'effectBlur' },
+    ];
+    for (const def of defs) {
+      const button = el('button', 'au-chip');
+      button.type = 'button';
+      button.textContent = this.s[def.label];
+      button.title = this.s[def.label];
+      button.setAttribute('aria-label', this.s[def.label]);
+      button.setAttribute('aria-pressed', String(this.effectKind === def.id));
+      button.addEventListener('click', () => this.setEffectKind(def.id));
+      this.effectKindButtons.set(def.id, button);
+      kinds.appendChild(button);
+    }
+    const brush = el('button', 'au-param au-param--liquify');
+    brush.type = 'button';
+    brush.title = this.s.effectBrush;
+    brush.setAttribute('aria-label', this.s.effectBrush);
+    brush.setAttribute('aria-pressed', 'false');
+    brush.innerHTML = `${icon('brush')}<span>${this.s.effectBrush}</span>`;
+    brush.addEventListener('click', () => this.setEffectBrush(!this.effectOn));
+    this.effectButton = brush;
+    top.append(kinds, brush);
+    pane.appendChild(top);
+
+    const hint = el('p', 'au-effect-hint');
+    hint.textContent = this.s.effectHint;
+    pane.appendChild(hint);
+
+    const sizeRow = el('div', 'au-deck__row au-deck__row--context au-liquify-row');
+    this.effectSizeTicks = this.makeTicks({
+      label: this.s.effectSize,
+      min: 1,
+      max: 20,
+      step: 1,
+      tickStep: 1,
+      defaultValue: this.effectSize,
+      ruler: false,
+      format: (input) => `${Math.round(input)}%`,
+      onInput: (input) => this.setEffectSizeControl(input),
+      onReset: () => this.setEffectSizeControl(8),
+    });
+    this.effectSizeValue = el('button', 'au-value au-glass au-glass--gold');
+    this.effectSizeValue.type = 'button';
+    this.effectSizeValue.textContent = `${this.effectSize}%`;
+    this.effectSizeValue.title = `${this.s.reset}: ${this.s.effectSize}`;
+    this.effectSizeValue.setAttribute('aria-label', `${this.s.reset}: ${this.s.effectSize}`);
+    this.effectSizeValue.addEventListener('click', () => this.setEffectSizeControl(8));
+    const clear = iconButton('reset', this.s.effectClear, () => this.clearEffectDabs());
+    clear.classList.add('au-reset');
+    sizeRow.append(this.effectSizeTicks.row, this.effectSizeValue, clear);
+    pane.appendChild(sizeRow);
+
+    const strengthRow = el('div', 'au-deck__row au-deck__row--context au-liquify-row');
+    this.effectStrengthTicks = this.makeTicks({
+      label: this.s.effectStrength,
+      min: 0,
+      max: 100,
+      step: 1,
+      tickStep: 2,
+      defaultValue: this.effectStrength,
+      zero: true,
+      ruler: true,
+      format: (input) => `${Math.round(input)}%`,
+      onInput: (input) => this.setEffectStrengthControl(input),
+      onReset: () => this.setEffectStrengthControl(60),
+    });
+    this.effectStrengthValue = el('button', 'au-value au-glass au-glass--gold');
+    this.effectStrengthValue.type = 'button';
+    this.effectStrengthValue.textContent = `${this.effectStrength}%`;
+    this.effectStrengthValue.title = `${this.s.reset}: ${this.s.effectStrength}`;
+    this.effectStrengthValue.setAttribute(
+      'aria-label',
+      `${this.s.reset}: ${this.s.effectStrength}`,
+    );
+    this.effectStrengthValue.addEventListener('click', () => this.setEffectStrengthControl(60));
+    strengthRow.append(this.effectStrengthTicks.row, this.effectStrengthValue);
+    pane.appendChild(strengthRow);
+
+    this.syncEffectControls();
+  }
+
+  private setEffectKind(kind: EffectKind): void {
+    if (this.effectKind === kind && this.effectOn) return;
+    this.effectKind = kind;
+    for (const [id, button] of this.effectKindButtons) {
+      button.setAttribute('aria-pressed', String(id === kind));
+    }
+    // Picking a style is the intent to paint, so enter the brush directly.
+    if (!this.effectOn) this.setEffectBrush(true);
+  }
+
+  /** Read the live size/strength from the state into the pane controls. */
+  private syncEffectControls(): void {
+    if (!this.effectSizeTicks || !this.effectStrengthTicks) return;
+    const effects = this.isReady ? this.getState().retouch?.effects : undefined;
+    const size = effects ? Math.round(effects.size * 100) : this.effectSize;
+    const strength = effects ? Math.round(effects.strength) : this.effectStrength;
+    this.effectSize = clamp(size, 1, 20);
+    this.effectStrength = clamp(strength, 0, 100);
+    const active = document.activeElement;
+    if (active !== this.effectSizeTicks.rail) {
+      this.effectSizeTicks.set(this.effectSize, false);
+    }
+    if (active !== this.effectStrengthTicks.rail) {
+      this.effectStrengthTicks.set(this.effectStrength, false);
+    }
+    if (this.effectSizeValue) this.effectSizeValue.textContent = `${this.effectSize}%`;
+    if (this.effectStrengthValue) {
+      this.effectStrengthValue.textContent = `${this.effectStrength}%`;
+    }
+  }
+
+  private setEffectSizeControl(value: number): void {
+    const next = clamp(Math.round(value), 1, 20);
+    this.effectSize = next;
+    if (this.isReady) this.setEffectSize(next / 100);
+  }
+
+  private setEffectStrengthControl(value: number): void {
+    const next = clamp(Math.round(value), 0, 100);
+    this.effectStrength = next;
+    if (this.isReady) this.setEffectStrength(next);
+  }
+
+  private clearEffectDabs(): void {
+    if (!this.isReady || !this.hasEffects()) return;
+    this.clearEffects();
+    this.syncUI();
+  }
+
+  private effectRadius(): number {
+    return this.effectSize / 100;
+  }
+
+  private setEffectBrush(on: boolean): void {
+    if (on && !this.isReady) return;
+    if (this.effectOn === on) return;
+    if (on && this.liquifyOn) this.setLiquify(false);
+    this.effectOn = on;
+    this.root.classList.toggle('au-effect', on);
+    this.effectButton?.setAttribute('aria-pressed', String(on));
+    this.stage.style.cursor = on || this.liquifyOn ? 'crosshair' : 'grab';
+    if (on) {
+      this.syncEffectControls();
+    } else {
+      this.effectStroke = null;
+      if (!this.liquifyOn && this.liquifyRing) this.liquifyRing.style.display = 'none';
+    }
   }
 
   /**
@@ -5037,6 +5239,7 @@ export class AurumEditor extends AurumCore {
 
   private setTab(tab: TabId): void {
     if (tab !== 'portrait') this.setLiquify(false);
+    if (tab !== 'effect') this.setEffectBrush(false);
     if (tab !== 'text' && this.textPlacing) {
       this.textPlacing = false;
       this.textPlaceBtn?.setAttribute('aria-pressed', 'false');
@@ -5048,6 +5251,7 @@ export class AurumEditor extends AurumCore {
       this.clearTransient();
     }
     this.currentTab = tab;
+    if (tab === 'effect') this.syncEffectControls();
     for (const [id, button] of this.tabButtons) {
       const active = id === tab;
       button.setAttribute('aria-selected', String(active));
@@ -5232,7 +5436,7 @@ export class AurumEditor extends AurumCore {
     this.stage.addEventListener('pointerup', this.onLiquifyPointerUp);
     this.stage.addEventListener('pointercancel', this.onLiquifyPointerUp);
     this.stage.addEventListener('pointerleave', () => {
-      if (!this.liquifyStroke && this.liquifyRing) {
+      if (!this.liquifyStroke && !this.effectStroke && this.liquifyRing) {
         this.liquifyRing.style.display = 'none';
       }
     });
@@ -5240,6 +5444,7 @@ export class AurumEditor extends AurumCore {
 
   private setLiquify(on: boolean): void {
     if (on && !this.isReady) return;
+    if (on && this.effectOn) this.setEffectBrush(false);
     if (this.liquifyOn === on) return;
     this.liquifyOn = on;
     this.root.classList.toggle('au-liquify', on);
@@ -5247,7 +5452,7 @@ export class AurumEditor extends AurumCore {
     const portrait = this.decks.get('portrait');
     if (portrait) portrait.context.style.display = on ? 'none' : '';
     if (this.liquifyContext) this.liquifyContext.style.display = on ? '' : 'none';
-    this.stage.style.cursor = on ? 'crosshair' : 'grab';
+    this.stage.style.cursor = on || this.effectOn ? 'crosshair' : 'grab';
     if (on) {
       this.liquifyTicks?.set(this.liquifySize, false);
       if (this.liquifyValue) this.liquifyValue.textContent = `${this.liquifySize}%`;
@@ -5256,7 +5461,7 @@ export class AurumEditor extends AurumCore {
       }
     } else {
       this.liquifyStroke = null;
-      if (this.liquifyRing) this.liquifyRing.style.display = 'none';
+      if (!this.effectOn && this.liquifyRing) this.liquifyRing.style.display = 'none';
     }
   }
 
@@ -5277,19 +5482,19 @@ export class AurumEditor extends AurumCore {
     return this.liquifySize / 100;
   }
 
-  /** Screen-space radius of the brush, used for dab spacing and the ring. */
-  private liquifyScreenRadius(): number {
-    const radius = this.liquifyRadius();
+  /** Screen-space radius shared by the liquify and region-effect brushes. */
+  private brushScreenRadius(): number {
+    const radius = this.effectOn ? this.effectRadius() : this.liquifyRadius();
     const center = this.screenPointAt(0.5, 0.5);
     const edge = this.screenPointAt(Math.min(1, 0.5 + radius), 0.5);
     if (!center || !edge) return 24;
     return Math.max(4, Math.hypot(edge.x - center.x, edge.y - center.y));
   }
 
-  private previewLiquifyRing(clientX: number, clientY: number): void {
+  private previewBrushRing(clientX: number, clientY: number): void {
     const ring = this.liquifyRing;
     if (!ring) return;
-    if (!this.liquifyOn) {
+    if (!this.liquifyOn && !this.effectOn) {
       ring.style.display = 'none';
       return;
     }
@@ -5299,7 +5504,7 @@ export class AurumEditor extends AurumCore {
       ring.style.display = 'none';
       return;
     }
-    const radius = this.liquifyScreenRadius();
+    const radius = this.brushScreenRadius();
     ring.style.display = 'block';
     ring.style.width = `${radius * 2}px`;
     ring.style.height = `${radius * 2}px`;
@@ -5307,7 +5512,7 @@ export class AurumEditor extends AurumCore {
   }
 
   private onLiquifyPointerDown = (event: PointerEvent): void => {
-    if (!this.liquifyOn || !this.isReady) return;
+    if ((!this.liquifyOn && !this.effectOn) || !this.isReady) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const point = this.sourcePointAt(event.clientX, event.clientY);
     if (!point) return;
@@ -5318,32 +5523,52 @@ export class AurumEditor extends AurumCore {
     } catch {
       // Pointer capture is best-effort (older Safari).
     }
-    this.liquifyStroke = {
-      pointerId: event.pointerId,
-      key: `liquify:${++this.liquifyGesture}`,
-      x: event.clientX,
-      y: event.clientY,
-      u: point.x,
-      v: point.y,
-    };
-    this.previewLiquifyRing(event.clientX, event.clientY);
+    if (this.effectOn) {
+      // A tap paints one stamp; a drag continues from this point.
+      this.effectStroke = {
+        pointerId: event.pointerId,
+        key: `effect:${++this.effectGesture}`,
+        x: event.clientX,
+        y: event.clientY,
+      };
+      this.addEffectDab(
+        {
+          kind: this.effectKind,
+          x: point.x,
+          y: point.y,
+          radius: this.effectRadius(),
+        },
+        this.effectStroke.key,
+      );
+    } else {
+      this.liquifyStroke = {
+        pointerId: event.pointerId,
+        key: `liquify:${++this.liquifyGesture}`,
+        x: event.clientX,
+        y: event.clientY,
+        u: point.x,
+        v: point.y,
+      };
+    }
+    this.previewBrushRing(event.clientX, event.clientY);
   };
 
-  private onLiquifyPointerMove = (event: PointerEvent): void => {
-    if (!this.liquifyOn) return;
-    this.previewLiquifyRing(event.clientX, event.clientY);
-    const stroke = this.liquifyStroke;
-    if (!stroke || stroke.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    event.stopPropagation();
-
-    const spacing = Math.max(1.5, this.liquifyScreenRadius() * 0.35);
-    let remaining = Math.hypot(event.clientX - stroke.x, event.clientY - stroke.y);
+  /**
+   * Walk a pointer segment at a fixed screen spacing and hand every sampled
+   * source point to `emit`. Both brushes share it so their stroke feel and
+   * their 48-dab cap stay identical.
+   */
+  private walkStroke(
+    stroke: { x: number; y: number },
+    targetX: number,
+    targetY: number,
+    spacing: number,
+    emit: (point: { x: number; y: number }) => void,
+  ): void {
+    let remaining = Math.hypot(targetX - stroke.x, targetY - stroke.y);
     if (remaining < spacing) return;
-    const dirX = (event.clientX - stroke.x) / remaining;
-    const dirY = (event.clientY - stroke.y) / remaining;
-    // Cap one event at 48 dabs. A fast flick is still sampled densely enough
-    // because the next event continues from the last emitted point.
+    const dirX = (targetX - stroke.x) / remaining;
+    const dirY = (targetY - stroke.y) / remaining;
     let steps = Math.min(48, Math.floor(remaining / spacing));
     while (steps > 0) {
       steps -= 1;
@@ -5351,7 +5576,39 @@ export class AurumEditor extends AurumCore {
       stroke.y += dirY * spacing;
       remaining -= spacing;
       const point = this.sourcePointAt(stroke.x, stroke.y);
-      if (!point) continue;
+      if (point) emit(point);
+    }
+  }
+
+  private onLiquifyPointerMove = (event: PointerEvent): void => {
+    if (!this.liquifyOn && !this.effectOn) return;
+    this.previewBrushRing(event.clientX, event.clientY);
+    const spacing = Math.max(1.5, this.brushScreenRadius() * 0.35);
+
+    if (this.effectOn) {
+      const stroke = this.effectStroke;
+      if (!stroke || stroke.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.walkStroke(stroke, event.clientX, event.clientY, spacing, (point) => {
+        this.addEffectDab(
+          {
+            kind: this.effectKind,
+            x: point.x,
+            y: point.y,
+            radius: this.effectRadius(),
+          },
+          stroke.key,
+        );
+      });
+      return;
+    }
+
+    const stroke = this.liquifyStroke;
+    if (!stroke || stroke.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.walkStroke(stroke, event.clientX, event.clientY, spacing, (point) => {
       const dx = point.x - stroke.u;
       const dy = point.y - stroke.v;
       if (Math.abs(dx) + Math.abs(dy) > 1e-5) {
@@ -5368,12 +5625,15 @@ export class AurumEditor extends AurumCore {
       }
       stroke.u = point.x;
       stroke.v = point.y;
-    }
+    });
   };
 
   private onLiquifyPointerUp = (event: PointerEvent): void => {
-    if (!this.liquifyStroke || this.liquifyStroke.pointerId !== event.pointerId) return;
-    this.liquifyStroke = null;
+    const liquify = this.liquifyStroke?.pointerId === event.pointerId;
+    const effect = this.effectStroke?.pointerId === event.pointerId;
+    if (!liquify && !effect) return;
+    if (liquify) this.liquifyStroke = null;
+    if (effect) this.effectStroke = null;
     try {
       this.stage.releasePointerCapture(event.pointerId);
     } catch {
@@ -5383,6 +5643,7 @@ export class AurumEditor extends AurumCore {
 
   private selectParam(deck: ParamDeck, key: keyof Adjustments): void {
     if (this.liquifyOn) this.setLiquify(false);
+    if (this.effectOn) this.setEffectBrush(false);
     deck.key = key;
     for (const [id, button] of deck.buttons) {
       button.setAttribute('aria-pressed', String(id === key));
@@ -5582,6 +5843,7 @@ export class AurumEditor extends AurumCore {
       button.classList.toggle('is-active', this.activeSavedId === id);
     }
     this.syncTuneUI();
+    this.syncEffectControls();
     this.positionTexts();
     this.syncHistory();
   }

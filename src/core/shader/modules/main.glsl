@@ -1,6 +1,39 @@
 void main() {
   vec2 uv = warpFace(v_uv);
   vec4 texel = texture2D(u_texture, uv);
+
+  /* 0. Painted region effects read the source texel before detail and colour.
+     The mask is in source UV, exactly like a liquify field, so the same
+     mosaic cell or blur radius lands on the same pixels in the preview and
+     in every export tile. */
+  if (u_effectStrength > 0.0001) {
+    vec3 effected = texel.rgb;
+    vec4 region = texture2D(u_effectMask, uv);
+    if (region.r > 0.001) {
+      // One bilinear sample in the centre of each cell; the grid counts cells
+      // across the whole source, so a block keeps its physical size at any
+      // render resolution.
+      vec2 cell = floor(uv * u_effectGrid) + 0.5;
+      vec3 block = texture2D(u_texture, clamp(cell / u_effectGrid, 0.0, 1.0)).rgb;
+      effected = mix(effected, block, region.r * u_effectStrength);
+    }
+    if (region.g > 0.001) {
+      vec2 ox = vec2(u_effectBlur.x, 0.0);
+      vec2 oy = vec2(0.0, u_effectBlur.y);
+      vec3 sum = texel.rgb;
+      sum += texture2D(u_texture, clamp(uv + ox, 0.0, 1.0)).rgb;
+      sum += texture2D(u_texture, clamp(uv - ox, 0.0, 1.0)).rgb;
+      sum += texture2D(u_texture, clamp(uv + oy, 0.0, 1.0)).rgb;
+      sum += texture2D(u_texture, clamp(uv - oy, 0.0, 1.0)).rgb;
+      sum += texture2D(u_texture, clamp(uv + ox + oy, 0.0, 1.0)).rgb;
+      sum += texture2D(u_texture, clamp(uv + ox - oy, 0.0, 1.0)).rgb;
+      sum += texture2D(u_texture, clamp(uv - ox + oy, 0.0, 1.0)).rgb;
+      sum += texture2D(u_texture, clamp(uv - ox - oy, 0.0, 1.0)).rgb;
+      effected = mix(effected, sum / 9.0, region.g * u_effectStrength);
+    }
+    texel.rgb = effected;
+  }
+
   vec3 c = texel.rgb;
   float lc = luma(c);
 

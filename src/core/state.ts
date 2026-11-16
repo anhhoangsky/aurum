@@ -5,6 +5,8 @@ import type {
   CurvePoint,
   CurveState,
   EditorState,
+  EffectDab,
+  EffectState,
   EnhanceState,
   HSLBandId,
   HSLBandState,
@@ -19,6 +21,10 @@ import {
   MAX_LIQUIFY_DABS,
   MAX_LIQUIFY_RADIUS,
 } from './liquify';
+import {
+  defaultEffectState,
+  normalizeEffectState,
+} from './effects';
 
 export const ADJUST_RANGES: Record<keyof Adjustments, [number, number]> = {
   brightness: [-100, 100],
@@ -155,7 +161,7 @@ export function defaultEnhance(): EnhanceState {
 }
 
 export function defaultRetouch(): RetouchState {
-  return { liquify: [] };
+  return { liquify: [], effects: defaultEffectState() };
 }
 
 /**
@@ -167,6 +173,7 @@ export function normalizeRetouch(input: unknown): RetouchState {
   const base = defaultRetouch();
   if (!input || typeof input !== 'object') return base;
   const raw = input as Partial<RetouchState>;
+  base.effects = normalizeEffectState(raw.effects);
   if (!Array.isArray(raw.liquify)) return base;
   const dabs: LiquifyDab[] = [];
   const start = Math.max(0, raw.liquify.length - MAX_LIQUIFY_DABS);
@@ -328,6 +335,11 @@ export function cloneState(state: EditorState): EditorState {
     },
     retouch: {
       liquify: retouch.liquify.map((dab) => ({ ...dab })),
+      effects: {
+        dabs: (retouch.effects?.dabs || []).map((dab) => ({ ...dab })),
+        size: retouch.effects?.size ?? defaultEffectState().size,
+        strength: retouch.effects?.strength ?? defaultEffectState().strength,
+      },
     },
     layers: cloneLayers(state.layers || []),
     ...(state.chain

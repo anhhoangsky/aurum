@@ -6,6 +6,8 @@ import type {
   CurvePoint,
   EditorEvents,
   EditorState,
+  EffectDab,
+  EffectMask,
   EnhanceSpec,
   EnhanceState,
   EventHandler,
@@ -93,6 +95,12 @@ import {
   MAX_LIQUIFY_DABS,
   MAX_LIQUIFY_RADIUS,
 } from './liquify';
+import {
+  buildEffectMask,
+  effectGeometry,
+  MAX_EFFECT_DABS,
+  normalizeEffectState,
+} from './effects';
 
 export type Bitmap = ImageBitmap | HTMLImageElement | HTMLCanvasElement;
 
@@ -315,6 +323,12 @@ export class AurumCore {
     height: number;
     field: LiquifyField | null;
   } = { source: null, width: 0, height: 0, field: null };
+  private effectCache: {
+    source: readonly EffectDab[] | null;
+    width: number;
+    height: number;
+    mask: EffectMask | null;
+  } = { source: null, width: 0, height: 0, mask: null };
   private previewQuality = 0;
   private colorMode: RenderColorSpace;
   private ditherEnabled: boolean;
@@ -1057,6 +1071,81 @@ export class AurumCore {
     return (this.state.retouch?.liquify.length || 0) > 0;
   }
 
+  /**
+   * Append one region-effect stamp. The mask is stored in source UV and
+   * rasterised on the next paint, so a stroke keeps its footprint through
+   * crop, rotation and every export tile.
+   */
+  addEffectDab(dab: EffectDab, coalesce = 'effect'): void {
+    if (!this.ready || !dab) return;
+    if (
+      (dab.kind !== 'mosaic' && dab.kind !== 'blur') ||
+      !Number.isFinite(dab.x) ||
+      !Number.isFinite(dab.y) ||
+      !Number.isFinite(dab.radius)
+    ) {
+      return;
+    }
+    const effects = this.state.retouch?.effects
+      || (this.state.retouch || (this.state.retouch = defaultRetouch())).effects
+      || (this.state.retouch.effects = normalizeEffectState(null));
+    effects.dabs.push({
+      kind: dab.kind,
+      x: clamp(dab.x, 0, 1),
+      y: clamp(dab.y, 0, 1),
+      radius: clamp(dab.radius, 0.002, 0.2),
+    });
+    if (effects.dabs.length > MAX_EFFECT_DABS) {
+      effects.dabs.splice(0, effects.dabs.length - MAX_EFFECT_DABS);
+    }
+    // The array is mutated in place; the mask cache cannot rely on identity.
+    this.effectCache.source = null;
+    this.scheduleRender();
+    this.commit(coalesce || 'effect');
+  }
+
+  /** Remove every region-effect stamp, keeping the current brush settings. */
+  clearEffects(coalesce = 'effect-clear'): void {
+    const effects = this.state.retouch?.effects;
+    if (!effects || effects.dabs.length === 0) return;
+    effects.dabs = [];
+    this.effectCache.source = null;
+    this.scheduleRender();
+    this.commit(coalesce);
+  }
+
+  getEffects(): EffectDab[] {
+    return (this.state.retouch?.effects?.dabs || []).map((dab) => ({ ...dab }));
+  }
+
+  hasEffects(): boolean {
+    return (this.state.retouch?.effects?.dabs.length || 0) > 0;
+  }
+
+  /** Brush radius as a fraction of the source width, 0.01..0.2. */
+  setEffectSize(value: number, coalesce = 'effect-size'): void {
+    if (!Number.isFinite(value)) return;
+    const effects = this.state.retouch?.effects;
+    if (!effects) return;
+    const next = clamp(value, 0.01, 0.2);
+    if (Math.abs(next - effects.size) < 0.0001) return;
+    effects.size = next;
+    this.scheduleRender();
+    this.commit(coalesce);
+  }
+
+  /** Region-effect blend strength, 0..100. */
+  setEffectStrength(value: number, coalesce = 'effect-strength'): void {
+    if (!Number.isFinite(value)) return;
+    const effects = this.state.retouch?.effects;
+    if (!effects) return;
+    const next = clamp(value, 0, 100);
+    if (Math.abs(next - effects.strength) < 0.01) return;
+    effects.strength = next;
+    this.scheduleRender();
+    this.commit(coalesce);
+  }
+
   /** Histogram/exposure/WB/noise analysis used by Auto Enhance. */
   async analyze(): Promise<AutoAnalysis> {
     const source = this.original || this.preview;
@@ -1290,6 +1379,30 @@ export class AurumCore {
       }
       liquify = this.liquifyCache.field;
     }
+    const effectDabs = this.state.retouch?.effects?.dabs;
+    const sourceSize = this.source();
+    let effects: EffectMask | null = null;
+    if (effectDabs && effectDabs.length) {
+      const cache = this.effectCache;
+      if (
+        cache.source !== effectDabs ||
+        cache.width !== sourceSize.width ||
+        cache.height !== sourceSize.height
+      ) {
+        this.effectCache = {
+          source: effectDabs,
+          width: sourceSize.width,
+          height: sourceSize.height,
+          mask: buildEffectMask(effectDabs, sourceSize.width, sourceSize.height),
+        };
+      }
+      effects = this.effectCache.mask;
+    }
+    const geometry = effectGeometry(
+      this.state.retouch?.effects,
+      sourceSize.width,
+      sourceSize.height,
+    );
     return buildEnhanceSpec({
       adjust: this.state.adjust,
       enhance,
@@ -1301,6 +1414,10 @@ export class AurumCore {
       dither: this.ditherEnabled ? 1 : 0,
       mask: this.beautyMask,
       liquify,
+      effects: effects && geometry.strength > 0 ? effects : null,
+      effectStrength: effects ? geometry.strength : 0,
+      effectGrid: geometry.grid,
+      effectBlur: geometry.blur,
       anchors: this.anchorPack,
     });
   }

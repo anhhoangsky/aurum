@@ -47,6 +47,14 @@ export {
   MAX_LIQUIFY_SHIFT,
   buildLiquifyField,
 } from './core/liquify';
+export {
+  EFFECT_MASK_MAX,
+  MAX_EFFECT_DABS,
+  buildEffectMask,
+  defaultEffectState,
+  effectGeometry,
+  normalizeEffectState,
+} from './core/effects';
 export { analyzeBitmap, autoAdjust } from './core/enhance/analyze';
 export {
   CURVE_PRESETS,

@@ -1,6 +1,7 @@
 import type {
   BeautyMask,
   ColorTransform,
+  EffectMask,
   EnhanceSpec,
   ExportOptions,
   ExportSpec,
@@ -42,6 +43,10 @@ interface Uniforms {
   maskLoc: WebGLUniformLocation | null;
   liquifyLoc: WebGLUniformLocation | null;
   liquifyShift: WebGLUniformLocation | null;
+  effectMaskLoc: WebGLUniformLocation | null;
+  effectStrength: WebGLUniformLocation | null;
+  effectGrid: WebGLUniformLocation | null;
+  effectBlur: WebGLUniformLocation | null;
   dither: WebGLUniformLocation | null;
   exposure: WebGLUniformLocation | null;
   brightness: WebGLUniformLocation | null;
@@ -93,6 +98,7 @@ interface GLState {
   lutTexture: WebGLTexture;
   maskTexture: WebGLTexture;
   liquifyTexture: WebGLTexture;
+  effectTexture: WebGLTexture;
   anchorTexture: WebGLTexture;
   whiteTexture: WebGLTexture;
   /** Built variants, keyed by build-time variant name. `null` = compile failed. */
@@ -107,6 +113,7 @@ interface GLState {
   lutRef: Uint8Array | null;
   maskRef: BeautyMask | null;
   liquifyRef: LiquifyField | null;
+  effectRef: EffectMask | null;
   anchorRef: Uint8Array | null;
   lutSize: number;
 }
@@ -160,6 +167,10 @@ function makeUniforms(gl: WebGLRenderingContext, program: WebGLProgram): Uniform
     maskLoc: u('u_mask'),
     liquifyLoc: u('u_liquify'),
     liquifyShift: u('u_liquifyShift'),
+    effectMaskLoc: u('u_effectMask'),
+    effectStrength: u('u_effectStrength'),
+    effectGrid: u('u_effectGrid'),
+    effectBlur: u('u_effectBlur'),
     dither: u('u_dither'),
     exposure: u('u_exposure'),
     brightness: u('u_brightness'),
@@ -321,6 +332,7 @@ function initGL(canvas: HTMLCanvasElement, preserveDrawingBuffer = false): GLSta
   const lutTexture = makeTexture(gl);
   const maskTexture = makeTexture(gl);
   const liquifyTexture = makeTexture(gl);
+  const effectTexture = makeTexture(gl);
   const anchorTexture = makeTexture(gl);
   const whiteTexture = makeTexture(gl);
   if (
@@ -329,6 +341,7 @@ function initGL(canvas: HTMLCanvasElement, preserveDrawingBuffer = false): GLSta
     !lutTexture ||
     !maskTexture ||
     !liquifyTexture ||
+    !effectTexture ||
     !anchorTexture ||
     !whiteTexture
   ) {
@@ -339,6 +352,7 @@ function initGL(canvas: HTMLCanvasElement, preserveDrawingBuffer = false): GLSta
       lutTexture,
       maskTexture,
       liquifyTexture,
+      effectTexture,
       anchorTexture,
       whiteTexture,
     ]) {
@@ -372,6 +386,7 @@ function initGL(canvas: HTMLCanvasElement, preserveDrawingBuffer = false): GLSta
     lutTexture,
     maskTexture,
     liquifyTexture,
+    effectTexture,
     anchorTexture,
     whiteTexture,
     programs,
@@ -384,6 +399,7 @@ function initGL(canvas: HTMLCanvasElement, preserveDrawingBuffer = false): GLSta
     lutRef: null,
     maskRef: null,
     liquifyRef: null,
+    effectRef: null,
     anchorRef: null,
     lutSize: 0,
   };
@@ -484,6 +500,23 @@ function uploadEnhanceTextures(state: GLState, enhance: EnhanceSpec): void {
       );
     }
     state.liquifyRef = enhance.liquify;
+  }
+  if (enhance.effects !== state.effectRef) {
+    if (enhance.effects) {
+      gl.bindTexture(gl.TEXTURE_2D, state.effectTexture);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        enhance.effects.width,
+        enhance.effects.height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        enhance.effects.data,
+      );
+    }
+    state.effectRef = enhance.effects;
   }
 }
 
@@ -590,6 +623,13 @@ function drawQuad(state: GLState, params: DrawParams): void {
   gl.uniform1f(u.skinTone, e.skinTone);
   gl.uniform1f(u.hasMask, e.mask ? 1 : 0);
   gl.uniform1f(u.liquifyShift, e.liquify ? e.liquify.shift : 0);
+  gl.uniform1f(u.effectStrength, e.effects ? e.effectStrength : 0);
+  gl.uniform2f(u.effectGrid, Math.max(1, e.effectGrid[0]), Math.max(1, e.effectGrid[1]));
+  gl.uniform2f(
+    u.effectBlur,
+    Math.max(0.0005, e.effectBlur[0]),
+    Math.max(0.0005, e.effectBlur[1]),
+  );
   gl.uniform1f(u.hasCurve, e.curve ? 1 : 0);
   gl.uniform1f(u.lutStrength, e.lut ? e.lutStrength : 0);
   gl.uniform1f(u.lutSize, Math.max(2, e.lutSize));
@@ -611,6 +651,7 @@ function drawQuad(state: GLState, params: DrawParams): void {
   gl.uniform1i(u.maskLoc, 3);
   gl.uniform1i(u.liquifyLoc, 4);
   gl.uniform1i(u.anchors, 5);
+  gl.uniform1i(u.effectMaskLoc, 6);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, state.texture);
   gl.activeTexture(gl.TEXTURE1);
@@ -623,6 +664,8 @@ function drawQuad(state: GLState, params: DrawParams): void {
   gl.bindTexture(gl.TEXTURE_2D, e.liquify ? state.liquifyTexture : state.whiteTexture);
   gl.activeTexture(gl.TEXTURE5);
   gl.bindTexture(gl.TEXTURE_2D, e.anchors ? state.anchorTexture : state.whiteTexture);
+  gl.activeTexture(gl.TEXTURE6);
+  gl.bindTexture(gl.TEXTURE_2D, e.effects ? state.effectTexture : state.whiteTexture);
   if (e.anchors && state.anchorRef !== e.anchors) {
     gl.texImage2D(
       gl.TEXTURE_2D,

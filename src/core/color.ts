@@ -2,6 +2,7 @@ import type {
   Adjustments,
   BeautyMask,
   ColorTransform,
+  EffectMask,
   EnhanceSpec,
   EnhanceState,
   FaceAnchor,
@@ -446,6 +447,14 @@ export interface EnhanceBuildInput {
   mask?: BeautyMask | null;
   /** Optional free-liquify displacement field. */
   liquify?: LiquifyField | null;
+  /** Optional painted region-effect mask. */
+  effects?: EffectMask | null;
+  /** Region-effect blend strength, 0..1. */
+  effectStrength?: number;
+  /** Mosaic grid counts across the source image. */
+  effectGrid?: [number, number];
+  /** Blur radius in image-UV units, per axis. */
+  effectBlur?: [number, number];
   /** Optional landmark anchor texture, aligned with `faces`. */
   anchors?: Uint8Array | null;
 }
@@ -493,6 +502,10 @@ export function buildEnhanceSpec(input: EnhanceBuildInput): EnhanceSpec {
     hsl: packHSL(input.enhance),
     mask: input.mask ?? null,
     liquify: input.liquify ?? null,
+    effects: input.effects ?? null,
+    effectStrength: input.effectStrength ?? 0,
+    effectGrid: input.effectGrid ?? [1, 1],
+    effectBlur: input.effectBlur ?? [0.004, 0.004],
     linear: input.linear ? 1 : 0,
     dither: input.dither ?? 0,
     quality: input.quality,

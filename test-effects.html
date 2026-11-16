@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum region effects test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .hosts { display: flex; gap: 16px; flex-wrap: wrap; }
+  .host { width: 512px; height: 512px; position: relative; flex: 0 0 auto; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="hosts"><div id="main" class="host"></div></div>
+<pre id="log">Running…</pre>
+<script type="module">
+import {
+  createCore,
+  normalizeState,
+  defaultState,
+  defaultEffectState,
+  buildEffectMask,
+  effectGeometry,
+  normalizeEffectState,
+  MAX_EFFECT_DABS,
+  EFFECT_MASK_MAX,
+} from './dist/aurum.esm.js?v=20261116d';
+
+const log = document.getElementById('log');
+const lines = [];
+let pass = 0;
+let fail = 0;
+
+function out(s) {
+  lines.push(s);
+  log.textContent = lines.join('\n');
+}
+function ok(label, condition, detail = '') {
+  if (condition) {
+    pass += 1;
+    out(`PASS ${label}${detail ? ` — ${detail}` : ''}`);
+  } else {
+    fail += 1;
+    out(`FAIL ${label}${detail ? ` — ${detail}` : ''}`);
+  }
+}
+function near(a, b, epsilon = 1e-6) {
+  return Math.abs(a - b) <= epsilon;
+}
+
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+const W = 512;
+const H = 512;
+
+function sourceCanvas() {
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1d2a33';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#c98f6b';
+  ctx.beginPath();
+  ctx.ellipse(W * 0.5, H * 0.5, W * 0.18, H * 0.22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // The grid sits on top of the subject so the centre region really has
+  // high-frequency detail: a mosaic must flatten it and a blur must remove it.
+  ctx.strokeStyle = '#6f6330';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= W; i += 16) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i, H);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i);
+    ctx.lineTo(W, i);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#ff2020';
+  ctx.fillRect(180, 180, 152, 8);
+  return canvas;
+}
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+const settle = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function psnr(a, b) {
+  let sum = 0;
+  let max = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 4) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = a[i + k] - b[i + k];
+      sum += d * d;
+      max = Math.max(max, Math.abs(d));
+    }
+  }
+  const mse = sum / (n * 0.75);
+  return { mse, max, psnr: mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse) };
+}
+
+function regionDiff(a, b, u0, v0, u1, v1) {
+  const x0 = Math.round(u0 * a.width);
+  const x1 = Math.round(u1 * a.width);
+  const y0 = Math.round(v0 * a.height);
+  const y1 = Math.round(v1 * a.height);
+  let sum = 0;
+  let count = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const at = (y * a.width + x) * 4;
+      sum += (Math.abs(a.data[at] - b.data[at]) +
+        Math.abs(a.data[at + 1] - b.data[at + 1]) +
+        Math.abs(a.data[at + 2] - b.data[at + 2])) / 3;
+      count += 1;
+    }
+  }
+  return sum / Math.max(1, count);
+}
+
+/** Mean absolute horizontal neighbour difference; drops when detail blurs. */
+function regionGradient(image, u0, v0, u1, v1) {
+  const x0 = Math.round(u0 * image.width);
+  const x1 = Math.round(u1 * image.width);
+  const y0 = Math.round(v0 * image.height);
+  const y1 = Math.round(v1 * image.height);
+  let sum = 0;
+  let count = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1 - 1; x += 1) {
+      const at = (y * image.width + x) * 4;
+      for (let k = 0; k < 3; k += 1) {
+        sum += Math.abs(image.data[at + k] - image.data[at + 4 + k]);
+        count += 1;
+      }
+    }
+  }
+  return sum / Math.max(1, count);
+}
+
+/**
+ * Mean squared horizontal neighbour difference. A blur made of shifted copies
+ * averages their differences away, so energy falls even when the absolute
+ * gradient keeps a few sharp edges; it is the honest detail-loss metric.
+ */
+function regionEnergy(image, u0, v0, u1, v1) {
+  const x0 = Math.round(u0 * image.width);
+  const x1 = Math.round(u1 * image.width);
+  const y0 = Math.round(v0 * image.height);
+  const y1 = Math.round(v1 * image.height);
+  let sum = 0;
+  let count = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1 - 1; x += 1) {
+      const at = (y * image.width + x) * 4;
+      for (let k = 0; k < 3; k += 1) {
+        const d = image.data[at + k] - image.data[at + 4 + k];
+        sum += d * d;
+        count += 1;
+      }
+    }
+  }
+  return sum / Math.max(1, count);
+}
+
+/** Largest channel spread along a short horizontal run (0 = a flat block). */
+function runSpread(image, u0, u1, v) {
+  const y = Math.round(v * image.height);
+  const x0 = Math.round(u0 * image.width);
+  const x1 = Math.round(u1 * image.width);
+  const min = [255, 255, 255];
+  const max = [0, 0, 0];
+  for (let x = x0; x <= x1; x += 1) {
+    const at = (y * image.width + x) * 4;
+    for (let k = 0; k < 3; k += 1) {
+      min[k] = Math.min(min[k], image.data[at + k]);
+      max[k] = Math.max(max[k], image.data[at + k]);
+    }
+  }
+  return Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+}
+
+function captureGL(core) {
+  core.setPreviewQuality('high');
+  core.renderNow();
+  const gl = core.canvas.getContext('webgl');
+  if (!gl) return null;
+  const width = gl.drawingBufferWidth;
+  const height = gl.drawingBufferHeight;
+  const raw = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    data.set(raw.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
+  }
+  return { width, height, data };
+}
+
+async function exportNow(core) {
+  core.renderNow();
+  return readBlob(await core.export({ type: 'image/png', tileSize: 512 }));
+}
+
+try {
+  /* ------------------------------------------------------- 1. state shape */
+  const base = defaultState();
+  ok('default effects state', base.retouch.effects && base.retouch.effects.dabs.length === 0,
+    `size=${base.retouch.effects && base.retouch.effects.size} strength=${base.retouch.effects && base.retouch.effects.strength}`);
+  const fx = defaultEffectState();
+  ok('default effect size is 8 %', fx.size === 0.08, String(fx.size));
+  ok('default effect strength is 60', fx.strength === 60, String(fx.strength));
+
+  const restored = normalizeState({
+    retouch: {
+      liquify: [],
+      effects: {
+        dabs: [
+          { kind: 'mosaic', x: 0.5, y: 0.5, radius: 0.12 },
+          { kind: 'blur', x: 1.4, y: -0.2, radius: 2 },
+          { kind: 'glitch', x: 0.2, y: 0.2, radius: 0.1 },
+          { kind: 'mosaic', x: 'bad', y: 0.2, radius: 0.1 },
+        ],
+        size: 0.9,
+        strength: -40,
+      },
+    },
+  });
+  const effects = restored.retouch.effects;
+  ok('normalize keeps valid dabs only', effects.dabs.length === 2, String(effects.dabs.length));
+  ok('normalize clamps size to 0.2', near(effects.size, 0.2), String(effects.size));
+  ok('normalize clamps strength to 0', near(effects.strength, 0), String(effects.strength));
+  ok('normalize clamps dab coordinates',
+    effects.dabs[1].x === 1 && effects.dabs[1].y === 0 && near(effects.dabs[1].radius, 0.2),
+    JSON.stringify(effects.dabs[1]));
+
+  const roundTrip = normalizeState(JSON.parse(JSON.stringify(restored)));
+  ok('effects survive a JSON round-trip',
+    JSON.stringify(roundTrip.retouch.effects) === JSON.stringify(effects));
+
+  const tooMany = normalizeEffectState({
+    dabs: Array.from({ length: MAX_EFFECT_DABS + 50 }, (_, i) => ({
+      kind: 'mosaic', x: 0.5, y: 0.5, radius: 0.05, tag: i,
+    })),
+  });
+  ok('dab cap keeps the newest stamps', tooMany.dabs.length === MAX_EFFECT_DABS,
+    String(tooMany.dabs.length));
+
+  /* -------------------------------------------------------- 2. mask bytes */
+  ok('empty dabs produce no mask', buildEffectMask([], 512, 512) === null);
+  const mosaicMask = buildEffectMask([{ kind: 'mosaic', x: 0.5, y: 0.5, radius: 0.1 }], 512, 512);
+  ok('mask keeps the source aspect', mosaicMask.width === 512 && mosaicMask.height === 512,
+    `${mosaicMask.width}x${mosaicMask.height}`);
+  const maskAt = (mask, x, y, channel) => mask.data[(y * mask.width + x) * 4 + channel];
+  const cx = Math.round(mosaicMask.width * 0.5);
+  const cy = Math.round(mosaicMask.height * 0.5);
+  ok('mosaic writes only the red channel',
+    maskAt(mosaicMask, cx, cy, 0) === 255 &&
+    maskAt(mosaicMask, cx, cy, 1) === 0 &&
+    maskAt(mosaicMask, cx, cy, 3) === 255,
+    `r=${maskAt(mosaicMask, cx, cy, 0)} g=${maskAt(mosaicMask, cx, cy, 1)} a=${maskAt(mosaicMask, cx, cy, 3)}`);
+  const feather = maskAt(mosaicMask, cx + Math.round(0.1 * 512 * 0.9), cy, 0);
+  ok('outer 35 % is a soft feather', feather > 0 && feather < 255, String(feather));
+  ok('outside the stamp stays empty', maskAt(mosaicMask, 4, 4, 0) === 0);
+
+  const bothMask = buildEffectMask([
+    { kind: 'mosaic', x: 0.5, y: 0.5, radius: 0.1 },
+    { kind: 'blur', x: 0.5, y: 0.5, radius: 0.1 },
+  ], 512, 512);
+  ok('mosaic and blur share one mask',
+    maskAt(bothMask, cx, cy, 0) === 255 && maskAt(bothMask, cx, cy, 1) === 255);
+
+  const bigMask = buildEffectMask([{ kind: 'blur', x: 0.5, y: 0.5, radius: 0.1 }], 4096, 2048);
+  ok('mask longest side is capped',
+    Math.max(bigMask.width, bigMask.height) === EFFECT_MASK_MAX && bigMask.height === 512,
+    `${bigMask.width}x${bigMask.height}`);
+
+  /* --------------------------------------------------------- 3. uniforms */
+  const geometry = effectGeometry({ dabs: [], size: 0.1, strength: 50 }, 512, 512);
+  ok('mosaic block edge follows the brush', geometry.blockPx === 28, String(geometry.blockPx));
+  ok('mosaic grid counts across the source',
+    near(geometry.grid[0], 512 / 28, 1e-9) && near(geometry.grid[1], 512 / 28, 1e-9),
+    `${geometry.grid[0].toFixed(3)}x${geometry.grid[1].toFixed(3)}`);
+  ok('blur radius is aspect corrected',
+    near(geometry.blur[0], 0.042) && near(geometry.blur[1], 0.042),
+    `${geometry.blur[0]}x${geometry.blur[1]}`);
+  ok('strength normalises to 0..1', near(geometry.strength, 0.5), String(geometry.strength));
+
+  /* ------------------------------------------------------------ 4. render */
+  const core = createCore({
+    container: '#main',
+    image: sourceCanvas(),
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+  });
+  await ready(core);
+  core.setResultMode(true);
+  await settle();
+
+  const neutral = await exportNow(core);
+  core.setEffectSize(0.1);
+  core.setEffectStrength(100);
+  core.addEffectDab({ kind: 'mosaic', x: 0.5, y: 0.5, radius: 0.15 }, 'mosaic-1');
+  await settle(150);
+  const mosaic = await exportNow(core);
+
+  const mosaicInside = regionDiff(mosaic, neutral, 0.46, 0.46, 0.54, 0.54);
+  const mosaicOutside = regionDiff(mosaic, neutral, 0.02, 0.02, 0.12, 0.12);
+  const spread = runSpread(mosaic, 0.5, 0.535, 0.5);
+  ok('mosaic changes the painted region', mosaicInside > 2, mosaicInside.toFixed(2));
+  ok('mosaic leaves the rest untouched', mosaicOutside < 0.05, mosaicOutside.toFixed(3));
+  ok('mosaic cells are flat', spread <= 1, `channel spread ${spread}`);
+  ok('one dab recorded', core.getEffects().length === 1, String(core.getEffects().length));
+
+  const preview = captureGL(core);
+  const parity = await exportNow(core);
+  if (preview && preview.width === parity.width && preview.height === parity.height) {
+    const p = psnr(preview.data, parity.data);
+    ok('preview and export agree', p.psnr > 40, `PSNR=${p.psnr.toFixed(2)} dB max=${p.max}`);
+  } else {
+    ok('preview and export agree', false,
+      `size ${preview && preview.width}x${preview && preview.height} vs ${parity.width}x${parity.height}`);
+  }
+
+  core.clearEffects();
+  await settle(120);
+  const cleared = await exportNow(core);
+  const clearDiff = psnr(cleared.data, neutral.data);
+  ok('clear removes every stamp', clearDiff.psnr === Infinity && core.getEffects().length === 0,
+    `PSNR=${clearDiff.psnr.toFixed(2)} dabs=${core.getEffects().length}`);
+  ok('clear keeps the brush settings',
+    near(core.getState().retouch.effects.size, 0.1) &&
+    near(core.getState().retouch.effects.strength, 100),
+    JSON.stringify(core.getState().retouch.effects));
+
+  core.setEffectSize(0.2);
+  core.addEffectDab({ kind: 'blur', x: 0.5, y: 0.5, radius: 0.2 }, 'blur-1');
+  await settle(150);
+  const blurred = await exportNow(core);
+  const neutralGradient = regionGradient(neutral, 0.4, 0.4, 0.6, 0.6);
+  const blurredGradient = regionGradient(blurred, 0.4, 0.4, 0.6, 0.6);
+  const neutralEnergy = regionEnergy(neutral, 0.4, 0.4, 0.6, 0.6);
+  const blurredEnergy = regionEnergy(blurred, 0.4, 0.4, 0.6, 0.6);
+  const blurInside = regionDiff(blurred, neutral, 0.46, 0.46, 0.54, 0.54);
+  const blurOutside = regionDiff(blurred, neutral, 0.02, 0.02, 0.12, 0.12);
+  ok('blur flattens detail', blurredEnergy < neutralEnergy * 0.35,
+    `detail ${neutralEnergy.toFixed(1)} -> ${blurredEnergy.toFixed(1)}; gradient ${neutralGradient.toFixed(2)} -> ${blurredGradient.toFixed(2)}`);
+  ok('blur changes the painted region', blurInside > 1, blurInside.toFixed(2));
+  ok('blur leaves the rest untouched', blurOutside < 0.05, blurOutside.toFixed(3));
+
+  core.undo();
+  await settle(150);
+  const undone = await exportNow(core);
+  const undoDiff = psnr(undone.data, neutral.data);
+  ok('undo removes the whole stroke', undoDiff.psnr === Infinity && core.getEffects().length === 0,
+    `PSNR=${undoDiff.psnr.toFixed(2)} dabs=${core.getEffects().length}`);
+
+  core.addEffectDab({ kind: 'blur', x: 0.5, y: 0.5, radius: 0.2 }, 'blur-2');
+  await settle(120);
+  core.setEffectStrength(0);
+  await settle(120);
+  const muted = await exportNow(core);
+  const mutedDiff = psnr(muted.data, neutral.data);
+  ok('strength 0 is a true bypass', mutedDiff.psnr === Infinity, `PSNR=${mutedDiff.psnr.toFixed(2)}`);
+  core.setEffectStrength(100);
+  await settle(120);
+  const back = regionEnergy(await exportNow(core), 0.4, 0.4, 0.6, 0.6);
+  ok('strength returns without rebuilding the mask', back < neutralEnergy * 0.35,
+    `${neutralEnergy.toFixed(1)} -> ${back.toFixed(1)}`);
+
+  out(`\n${pass} passed, ${fail} failed`);
+  out(fail === 0 ? 'ALL PASS' : 'FAILURES');
+} catch (error) {
+  out(`ERROR: ${error && error.stack ? error.stack : error}`);
+}
+</script>
+</body>
+</html>
