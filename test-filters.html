@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum filters spec test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+  .pass { color: #7ee787; }
+  .fail { color: #ff7b72; }
+  .summary { font-weight: 700; }
+</style>
+</head>
+<body>
+<pre id="log">Running…</pre>
+<script>
+  window.addEventListener('error', (event) => {
+    const log = document.getElementById('log');
+    log.textContent = `ERROR ${event.message || '(empty)'}\n${event.filename}:${event.lineno}:${event.colno}`;
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    const log = document.getElementById('log');
+    log.textContent = `REJECTION ${String(event.reason)}`;
+  });
+</script>
+<script type="module">
+import {
+  PRESETS,
+  buildColorTransform,
+  presetById,
+} from './dist/aurum.esm.js?v=20261116b';
+
+const SWATCHES = [
+  ['skin', [201, 143, 107]],
+  ['sky', [125, 167, 201]],
+  ['foliage', [77, 122, 69]],
+  ['red', [179, 58, 50]],
+  ['highlight', [242, 232, 214]],
+  ['shadow', [11, 11, 13]],
+];
+
+// Produced by the release implementation before the spec move; the exact
+// 8-bit results are the "mandatory palette" of `specs/filters.json`.
+const GOLDEN = {
+  'original': [[201,143,107],[125,167,201],[77,122,69],[179,58,50],[242,232,214],[11,11,13]],
+  'vivid': [[227,140,87],[110,173,223],[60,127,48],[222,42,30],[255,240,213],[2,2,5]],
+  'dramatic': [[217,150,124],[136,178,232],[71,118,70],[176,44,43],[255,255,255],[0,0,0]],
+  'mono': [[155,155,155],[164,164,164],[107,107,107],[79,79,79],[243,243,243],[0,0,0]],
+  'vintage': [[248,168,116],[193,188,184],[124,128,77],[196,86,58],[255,255,213],[24,18,12]],
+  'warm': [[225,146,94],[140,170,177],[86,124,61],[200,59,44],[255,237,188],[12,11,11]],
+  'cool': [[181,143,124],[112,167,233],[69,122,80],[161,58,58],[218,232,248],[10,11,15]],
+  'meitu-natural': [[215,145,99],[126,171,202],[76,126,63],[198,56,45],[253,237,208],[11,11,13]],
+  'meitu-korea': [[221,142,98],[127,168,203],[77,124,62],[205,54,44],[255,232,207],[12,11,13]],
+  'meitu-japan': [[201,143,111],[129,165,199],[83,124,75],[180,64,57],[240,226,211],[21,21,23]],
+  'meitu-skin': [[219,155,114],[139,180,207],[89,134,76],[196,68,57],[255,247,220],[20,19,21]],
+  'meitu-pink': [[225,140,95],[126,167,203],[76,123,59],[212,52,42],[255,230,204],[12,11,13]],
+  'meitu-white': [[214,155,118],[137,180,215],[85,131,77],[188,64,56],[255,251,232],[12,12,14]],
+  'xingtu-film': [[206,147,109],[119,176,227],[67,125,64],[185,49,42],[249,249,239],[0,0,0]],
+  'xingtu-hk': [[208,145,113],[130,170,213],[76,120,69],[179,53,47],[255,243,233],[0,0,1]],
+  'xingtu-showa': [[198,144,107],[135,164,178],[87,120,72],[169,65,54],[244,227,197],[18,17,17]],
+  'xingtu-kama': [[218,145,92],[129,171,185],[78,126,59],[200,57,42],[255,237,191],[12,11,12]],
+  'xingtu-night': [[192,142,116],[119,166,221],[70,118,72],[167,53,49],[236,236,240],[2,2,4]],
+  'xingtu-morning': [[219,148,96],[131,174,190],[80,128,61],[200,58,44],[255,241,198],[12,11,12]],
+  'lr-cinema': [[211,148,107],[120,177,227],[66,124,61],[188,47,39],[255,253,239],[0,0,0]],
+  'lr-moody': [[200,145,114],[127,170,211],[71,116,67],[166,49,43],[253,246,238],[0,0,0]],
+  'lr-vibrant': [[222,140,89],[112,171,220],[63,127,52],[217,45,34],[251,237,211],[5,5,8]],
+  'lr-pastel': [[204,145,108],[126,169,203],[82,127,73],[188,65,56],[238,228,210],[23,23,25]],
+  'lr-desert': [[225,142,88],[129,168,182],[78,124,55],[209,54,40],[255,232,186],[12,11,12]],
+  'lr-street': [[210,147,108],[129,174,211],[71,119,62],[178,47,38],[255,253,234],[0,0,0]],
+  'lr-faded': [[190,145,118],[133,165,191],[89,123,83],[163,71,65],[232,224,210],[25,25,27]],
+  'lr-teal': [[191,148,110],[113,174,219],[69,128,70],[175,58,50],[226,241,227],[10,11,14]],
+  'mono-warm': [[162,156,144],[170,164,151],[115,111,102],[88,85,78],[247,237,219],[12,11,10]],
+  'mono-cool': [[144,150,162],[151,157,170],[102,106,115],[78,81,88],[219,228,247],[10,11,12]],
+};
+
+const CATEGORY_COUNTS = { root: 6, meitu: 6, xingtu: 6, lr: 8, mono: 3 };
+const ZERO = { exposure: 0, brightness: 0, contrast: 0, saturation: 0, warmth: 0 };
+
+const log = document.getElementById('log');
+const lines = [];
+let passes = 0;
+const failures = [];
+
+function out(text, cls = '') {
+  lines.push(cls ? `<span class="${cls}">${text}</span>` : text);
+  log.innerHTML = lines.join('\n');
+}
+
+function ok(name, condition, detail = '') {
+  if (condition) {
+    passes += 1;
+    out(`PASS ${name}${detail ? ` — ${detail}` : ''}`, 'pass');
+  } else {
+    failures.push(name);
+    out(`FAIL ${name}${detail ? ` — ${detail}` : ''}`, 'fail');
+  }
+}
+
+function eq(name, actual, expected) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  ok(name, a === e, a === e ? '' : `got ${a}, want ${e}`);
+}
+
+function close(a, b, tolerance = 1e-12) {
+  return Math.abs(a - b) <= tolerance;
+}
+
+function applyMatrix(color, rgb) {
+  const m = color.matrix;
+  const o = color.offset;
+  const input = [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255];
+  const out = new Uint8ClampedArray(4);
+  out[0] = (m[0] * input[0] + m[1] * input[1] + m[2] * input[2] + o[0]) * 255;
+  out[1] = (m[3] * input[0] + m[4] * input[1] + m[5] * input[2] + o[1]) * 255;
+  out[2] = (m[6] * input[0] + m[7] * input[1] + m[8] * input[2] + o[2]) * 255;
+  out[3] = 255;
+  return [out[0], out[1], out[2], out[3]];
+}
+
+const goldenIds = Object.keys(GOLDEN);
+eq('filter count', PRESETS.length, goldenIds.length);
+eq('filter ids and order', PRESETS.map((preset) => preset.id), goldenIds);
+
+const unique = new Set(PRESETS.map((preset) => preset.id));
+ok('ids are unique', unique.size === PRESETS.length, `${unique.size} distinct`);
+
+const categories = {};
+for (const preset of PRESETS) {
+  categories[preset.category] = (categories[preset.category] || 0) + 1;
+}
+let categoriesOk = true;
+for (const [category, count] of Object.entries(CATEGORY_COUNTS)) {
+  if (categories[category] !== count) categoriesOk = false;
+}
+ok(
+  'categories',
+  categoriesOk && Object.keys(categories).length === Object.keys(CATEGORY_COUNTS).length,
+  JSON.stringify(categories)
+);
+
+let shapes = true;
+let finite = true;
+for (const preset of PRESETS) {
+  if (preset.color.matrix.length !== 9 || preset.color.offset.length !== 3) {
+    shapes = false;
+  }
+  for (const value of [...preset.color.matrix, ...preset.color.offset]) {
+    if (!Number.isFinite(value)) finite = false;
+  }
+}
+ok('matrix 3x3 and offset 3', shapes);
+ok('all coefficients finite', finite);
+
+const original = presetById('original');
+eq('original matrix', original.color.matrix, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+eq('original offset', original.color.offset, [0, 0, 0]);
+eq('original has no CSS', original.css, '');
+
+let cssOk = true;
+let hintsOk = true;
+for (const preset of PRESETS) {
+  if (preset.id === 'original') continue;
+  if (!preset.css || !preset.css.trim()) cssOk = false;
+  const shouldHint =
+    preset.id === 'original' ||
+    preset.category === 'meitu' ||
+    preset.category === 'xingtu' ||
+    preset.category === 'lr' ||
+    preset.id === 'mono-warm' ||
+    preset.id === 'mono-cool';
+  if (shouldHint && !preset.hint) hintsOk = false;
+  if (!shouldHint && preset.hint) hintsOk = false;
+}
+ok('every toned filter has a CSS fallback', cssOk);
+ok('hints only on the named tone families', hintsOk);
+
+let namesOk = true;
+for (const preset of PRESETS) {
+  if (!preset.label || !preset.labelEn) namesOk = false;
+}
+ok('Vietnamese and English labels present', namesOk);
+
+let transformsOk = true;
+let transformsDetail = '';
+for (const preset of PRESETS) {
+  const transform = buildColorTransform(ZERO, preset.id);
+  const sameMatrix = transform.matrix.every((value, index) =>
+    close(value, preset.color.matrix[index]));
+  const sameOffset = transform.offset.every((value, index) =>
+    close(value, preset.color.offset[index]));
+  if (!sameMatrix || !sameOffset) {
+    transformsOk = false;
+    transformsDetail = preset.id;
+    break;
+  }
+}
+ok('zero adjustments upload the spec matrix', transformsOk, transformsDetail);
+
+let paletteOk = true;
+let paletteDetail = '';
+for (const preset of PRESETS) {
+  const golden = GOLDEN[preset.id];
+  const actual = SWATCHES.map(([, rgb]) => applyMatrix(preset.color, rgb).slice(0, 3));
+  if (JSON.stringify(actual) !== JSON.stringify(golden)) {
+    paletteOk = false;
+    paletteDetail = preset.id;
+    break;
+  }
+}
+ok('mandatory palette for all filters', paletteOk, paletteDetail);
+
+let alphaOk = true;
+for (const preset of PRESETS) {
+  for (const [, rgb] of SWATCHES) {
+    const pixel = applyMatrix(preset.color, rgb);
+    if (pixel[3] !== 255) alphaOk = false;
+  }
+}
+ok('alpha is untouched', alphaOk);
+
+eq('unknown id falls back to original', presetById('sepia').id, 'original');
+eq(
+  'named lookup returns the same object',
+  presetById('lr-teal'),
+  PRESETS.find((preset) => preset.id === 'lr-teal')
+);
+
+const summary = failures.length
+  ? `FAIL ${failures.length} / ${passes + failures.length} checks`
+  : `ALL PASS (${passes} checks)`;
+out('', '');
+out(summary, failures.length ? 'fail summary' : 'pass summary');
+window.__aurumFilters = { passes, failures, total: passes + failures.length };
+</script>
+</body>
+</html>
