@@ -487,6 +487,17 @@
 .au-param--liquify[aria-pressed="true"]{
   background:rgba(243,199,123,.2);border-color:rgba(243,199,123,.55);
 }
+/* One-tap chains lead the portrait rail: gold action chips, not a value. */
+.au-param--preset{
+  color:#241a08;font-weight:700;
+  background:linear-gradient(180deg,var(--au-gold),#d9a94f);
+  border-color:rgba(255,255,255,.28);
+  box-shadow:0 2px 10px rgba(243,199,123,.22);
+}
+.au-param--preset:hover{
+  filter:brightness(1.06);
+  background:linear-gradient(180deg,var(--au-gold),#d9a94f);
+}
 .au-liquify-row .au-ticksrow{flex:1 1 auto;width:auto;min-width:0}
 .au-liquify-row .au-value{
   height:40px;min-width:44px;padding:0 7px;display:flex;

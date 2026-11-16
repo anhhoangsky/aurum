@@ -1,6 +1,6 @@
 import { build, transform } from 'esbuild';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -122,6 +122,14 @@ for (const name of modelFiles) {
   } else {
     console.warn(`AI model ${name} not found; that quality option will be unavailable.`);
   }
+}
+
+// Shared specs: the web build reads them at build time and the Swift client
+// bundles the same files, so filter/preset ids cannot drift between clients.
+const specsDir = 'dist/specs';
+mkdirSync(specsDir, { recursive: true });
+for (const name of readdirSync('specs')) {
+  if (name.endsWith('.json')) copyFileSync(path.join('specs', name), path.join(specsDir, name));
 }
 
 const cssSource = readFileSync('src/ui/styles.css', 'utf8');

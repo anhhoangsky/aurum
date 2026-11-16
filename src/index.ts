@@ -26,6 +26,8 @@ export {
   ADJUST_KEYS,
   ADJUST_RANGES,
   HSL_BANDS,
+  MAX_LAYERS,
+  cloneLayers,
   cloneState,
   defaultAdjust,
   defaultCrop,
@@ -34,6 +36,8 @@ export {
   defaultHSL,
   defaultState,
   defaultTransform,
+  normalizeChain,
+  normalizeLayers,
   normalizeRetouch,
   normalizeState,
 } from './core/state';

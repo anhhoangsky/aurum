@@ -1,5 +1,6 @@
 import type {
   Adjustments,
+  ChainState,
   CropState,
   CurvePoint,
   CurveState,
@@ -8,8 +9,10 @@ import type {
   HSLBandId,
   HSLBandState,
   HSLState,
+  LayerState,
   LiquifyDab,
   RetouchState,
+  TextLayerState,
   TransformState,
 } from './types';
 import {
@@ -192,15 +195,105 @@ export function normalizeRetouch(input: unknown): RetouchState {
   return base;
 }
 
+/* ------------------------------------------------------------------ layers */
+
+/** Hard cap so a hand-edited state cannot ask the UI to build thousands of nodes. */
+export const MAX_LAYERS = 64;
+
+const TEXT_ALIGNS = ['left', 'center', 'right'] as const;
+const LAYER_ID = /^[a-zA-Z0-9_-]{1,40}$/;
+const LAYER_FONT = /^[a-z0-9-]{1,24}$/i;
+const LAYER_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const MAX_TEXT_LENGTH = 500;
+
+/**
+ * Layers are untrusted input in the same way liquify dabs are: clamp every
+ * number, whitelist fonts and colours, and drop anything that is not a text
+ * layer instead of letting the host build a node from a hand-edited JSON.
+ */
+function normalizeLayer(input: unknown, index: number): TextLayerState | null {
+  if (!input || typeof input !== 'object') return null;
+  const raw = input as Partial<TextLayerState> & Record<string, unknown>;
+  // v2.0 only knows text; an unknown `kind` is kept out rather than guessed.
+  if (raw.kind !== undefined && raw.kind !== 'text') return null;
+  const align = (TEXT_ALIGNS as readonly string[]).includes(raw.align as string)
+    ? (raw.align as TextLayerState['align'])
+    : 'center';
+  return {
+    kind: 'text',
+    id: typeof raw.id === 'string' && LAYER_ID.test(raw.id) ? raw.id : `t${index}`,
+    text: typeof raw.text === 'string' ? raw.text.slice(0, MAX_TEXT_LENGTH) : '',
+    x: clamp(finite(raw.x, 0.5), 0, 1),
+    y: clamp(finite(raw.y, 0.5), 0, 1),
+    size: clamp(finite(raw.size, 0.07), 0.01, 0.5),
+    color:
+      typeof raw.color === 'string' && LAYER_COLOR.test(raw.color)
+        ? raw.color
+        : '#ffffff',
+    bold: bool(raw.bold, false),
+    italic: bool(raw.italic, false),
+    outline: bool(raw.outline, false),
+    shadow: bool(raw.shadow, true),
+    align,
+    rotation: clamp(finite(raw.rotation, 0), -180, 180),
+    opacity: clamp(finite(raw.opacity, 1), 0, 1),
+    font:
+      typeof raw.font === 'string' && LAYER_FONT.test(raw.font)
+        ? raw.font
+        : 'sys',
+  };
+}
+
+export function normalizeLayers(input: unknown): LayerState[] {
+  if (!Array.isArray(input)) return [];
+  const out: TextLayerState[] = [];
+  const seen = new Set<string>();
+  const start = Math.max(0, input.length - MAX_LAYERS);
+  for (let i = start; i < input.length; i += 1) {
+    const layer = normalizeLayer(input[i], i);
+    if (!layer) continue;
+    // Duplicate ids make selection and reordering ambiguous, so a hand-edited
+    // state gets a suffix. Keep the base short enough that the result still
+    // matches LAYER_ID on the next normalise pass (round-trip stays stable).
+    let id = layer.id;
+    for (let n = 1; seen.has(id); n += 1) id = `${layer.id.slice(0, 36)}-${n}`;
+    layer.id = id;
+    seen.add(id);
+    out.push(layer);
+  }
+  return out;
+}
+
+export function cloneLayers(layers: LayerState[]): LayerState[] {
+  return layers.map((layer) => ({ ...layer }));
+}
+
+export function normalizeChain(input: unknown): ChainState | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Partial<ChainState>;
+  if (typeof raw.id !== 'string' || !/^[a-z0-9-]{1,32}$/i.test(raw.id)) {
+    return undefined;
+  }
+  const strengths: Record<string, number> = {};
+  if (raw.strengths && typeof raw.strengths === 'object') {
+    for (const [key, value] of Object.entries(raw.strengths)) {
+      if (!/^[a-zA-Z0-9]{1,24}$/.test(key) || !Number.isFinite(value)) continue;
+      strengths[key] = clamp(value as number, 0, 100);
+    }
+  }
+  return { id: raw.id, strengths };
+}
+
 export function defaultState(): EditorState {
   return {
-    version: 1,
+    version: 2,
     transform: defaultTransform(),
     crop: defaultCrop(),
     adjust: defaultAdjust(),
     filter: 'original',
     enhance: defaultEnhance(),
     retouch: defaultRetouch(),
+    layers: [],
   };
 }
 
@@ -216,7 +309,7 @@ export function cloneState(state: EditorState): EditorState {
     hsl[band] = { ...(enhance.hsl[band] || hsl[band]) };
   }
   return {
-    version: 1,
+    version: 2,
     transform: { ...state.transform },
     crop: { ...state.crop },
     adjust: { ...state.adjust },
@@ -236,6 +329,15 @@ export function cloneState(state: EditorState): EditorState {
     retouch: {
       liquify: retouch.liquify.map((dab) => ({ ...dab })),
     },
+    layers: cloneLayers(state.layers || []),
+    ...(state.chain
+      ? {
+          chain: {
+            id: state.chain.id,
+            strengths: { ...state.chain.strengths },
+          },
+        }
+      : {}),
   };
 }
 
@@ -376,6 +478,9 @@ export function normalizeState(input: unknown): EditorState {
   base.filter = typeof raw.filter === 'string' && raw.filter ? raw.filter : 'original';
   base.enhance = normalizeEnhance(raw.enhance);
   base.retouch = normalizeRetouch(raw.retouch);
+  base.layers = normalizeLayers(raw.layers);
+  const chain = normalizeChain(raw.chain);
+  if (chain) base.chain = chain;
   return base;
 }
 

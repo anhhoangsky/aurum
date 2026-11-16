@@ -7,6 +7,7 @@ export type IconName =
   | 'tiltY'
   | 'tiltX'
   | 'adjust'
+  | 'portrait'
   | 'filter'
   | 'rotateLeft'
   | 'rotateRight'
@@ -52,6 +53,8 @@ const PATHS: Record<IconName, string> = {
     '<path d="M3.4 12h17.2"/><path d="m7.2 8.2-3.8 3.8 3.8 3.8"/><path d="m16.8 8.2 3.8 3.8-3.8 3.8"/>',
   adjust:
     '<path d="M4 6h7M15 6h5M4 12h3M11 12h9M4 18h9M17 18h3"/><circle cx="13" cy="6" r="1.9"/><circle cx="9" cy="12" r="1.9"/><circle cx="15" cy="18" r="1.9"/>',
+  portrait:
+    '<circle cx="12" cy="11" r="7.5"/><path d="M9.3 10.1h.01M14.7 10.1h.01" stroke-width="2.2" stroke-linecap="round"/><path d="M8.8 13.4c.9 1.1 2 1.6 3.2 1.6s2.3-.5 3.2-1.6"/>',
   filter:
     '<circle cx="9.2" cy="9.2" r="5.7"/><circle cx="14.8" cy="9.2" r="5.7"/><circle cx="12" cy="14.4" r="5.7"/>',
   rotateLeft:

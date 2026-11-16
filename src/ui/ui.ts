@@ -12,12 +12,33 @@ import { ADJUST_RANGES, clamp, defaultEnhance } from '../core/state';
 import { isAbortError } from '../core/async';
 import { PRESETS, presetThumbnail } from '../core/color';
 import type { PresetCategory } from '../core/color';
-import type { EditorState } from '../core/types';
+import type { EditorState, LayerState, SetStateOptions, TextLayerState } from '../core/types';
 import { maxFrame } from '../core/math';
 import { ensureStyles } from './styles';
 import { icon, type IconName } from './icons';
+import portraitPresets from '../../specs/presets.json';
 
-export type TabId = 'crop' | 'adjust' | 'filter' | 'text' | 'ai';
+/**
+ * One-tap chain shared with the Swift client through `specs/presets.json`.
+ * Values are absolute editor units; `filter` is optional and only the keys
+ * present are written, so a chain composes with the user's other sliders.
+ */
+interface ChainPreset {
+  id: string;
+  name: string;
+  nameEn?: string;
+  group: string;
+  icon?: string;
+  when?: 'portrait' | 'any';
+  chain: {
+    filter?: string;
+    adjust?: Partial<Record<keyof Adjustments, number>>;
+  };
+}
+
+const CHAIN_PRESETS = (portraitPresets as unknown as { presets: ChainPreset[] }).presets;
+
+export type TabId = 'crop' | 'adjust' | 'portrait' | 'filter' | 'text' | 'ai';
 export type CropMode = 'ratio' | 'rotation' | 'perspectiveY' | 'perspectiveX';
 export type Locale = 'vi' | 'en';
 
@@ -35,6 +56,7 @@ const STRINGS = {
     openImage: 'Mở ảnh',
     tabCrop: 'Cắt',
     tabAdjust: 'Tinh chỉnh',
+    tabPortrait: 'Chân dung',
     tabFilter: 'Bộ lọc',
     aspect: 'Tỷ lệ khung',
     ratioLabel: 'Tỷ lệ',
@@ -47,6 +69,7 @@ const STRINGS = {
     rotation: 'Góc xoay',
     reset: 'Đặt lại',
     adjustTitle: 'Tinh chỉnh',
+    portraitTitle: 'Chân dung',
     brightness: 'Độ sáng',
     contrast: 'Độ tương phản',
     saturation: 'Độ bão hòa',
@@ -175,6 +198,7 @@ const STRINGS = {
     deletePreset: 'Xoá',
     presetSaved: 'Đã lưu bộ lọc',
     presetApplied: 'Đã áp dụng bộ lọc',
+    beautyApplied: 'Đã áp dụng làm đẹp',
     presetDeleted: 'Đã xoá bộ lọc',
     presetExists: 'Tên này đã có — chọn tên khác',
     textTitle: 'Thêm chữ lên ảnh',
@@ -418,6 +442,7 @@ const STRINGS = {
     deletePreset: 'Delete',
     presetSaved: 'Filter saved',
     presetApplied: 'Filter applied',
+    beautyApplied: 'Beauty applied',
     presetDeleted: 'Filter deleted',
     presetExists: 'That name exists — pick another',
     textTitle: 'Add text to photo',
@@ -679,6 +704,21 @@ interface TickControl {
   focus: () => void;
 }
 
+/**
+ * One tab's parameter rail: the chips, the single value ruler and the reset
+ * readout. The adjust and portrait tabs each own one, so both keep their
+ * selected slider without duplicating the interaction code.
+ */
+interface ParamDeck {
+  tab: TabId;
+  key: keyof Adjustments;
+  buttons: Map<keyof Adjustments, HTMLButtonElement>;
+  params: HTMLElement;
+  ticks: TickControl;
+  context: HTMLElement;
+  value: HTMLButtonElement;
+}
+
 interface CropDrag {
   pointerId: number;
   handle: string;
@@ -697,6 +737,7 @@ interface CropDrag {
 
 const TABS: { id: TabId; icon: IconName; label: keyof UIStrings }[] = [
   { id: 'adjust', icon: 'adjust', label: 'tabAdjust' },
+  { id: 'portrait', icon: 'portrait', label: 'tabPortrait' },
   { id: 'filter', icon: 'filter', label: 'tabFilter' },
   { id: 'text', icon: 'text', label: 'tabText' },
   { id: 'ai', icon: 'wand', label: 'tabAi' },
@@ -742,7 +783,7 @@ const ADJUST_SHORT: Record<keyof Adjustments, keyof UIStrings> = {
   mouthSize: 'mouthSizeShort',
 };
 
-/** Ordered the way photographers think: exposure, colour, detail, skin, mood. */
+/** Ordered the way photographers think: exposure, colour, detail, mood. */
 const ADJUST_GROUPS: {
   id: string;
   label: keyof UIStrings;
@@ -759,6 +800,18 @@ const ADJUST_GROUPS: {
     keys: ['saturation', 'vibrance', 'warmth', 'tint', 'gamma'],
   },
   { id: 'detail', label: 'groupDetail', keys: ['clarity', 'sharpen', 'denoise'] },
+  { id: 'effect', label: 'groupEffect', keys: ['vignette'] },
+];
+
+/**
+ * The portrait tab owns skin and face shape the way Xingtu does: everyday
+ * retouch first, then the six reshape sliders, then the liquify brush.
+ */
+const PORTRAIT_GROUPS: {
+  id: string;
+  label: keyof UIStrings;
+  keys: (keyof Adjustments)[];
+}[] = [
   {
     id: 'portrait',
     label: 'groupPortrait',
@@ -769,7 +822,6 @@ const ADJUST_GROUPS: {
     label: 'groupShape',
     keys: ['faceSlim', 'jawline', 'chin', 'eyeSize', 'noseSize', 'mouthSize'],
   },
-  { id: 'effect', label: 'groupEffect', keys: ['vignette'] },
 ];
 
 const FORMATS: { type: ExportMime; label: string }[] = [
@@ -781,26 +833,7 @@ const FORMATS: { type: ExportMime; label: string }[] = [
 let uid = 0;
 
 // ------------------------------------------------------------------ text layers
-export interface AurumTextLayer {
-  id: string;
-  text: string;
-  /** Centre position in exported-image fractions (0..1). */
-  x: number;
-  y: number;
-  /** Font size as fraction of export height. */
-  size: number;
-  color: string;
-  bold: boolean;
-  italic: boolean;
-  outline: boolean;
-  shadow: boolean;
-  align: 'left' | 'center' | 'right';
-  /** Rotation degrees, -180..180. */
-  rotation: number;
-  /** Opacity 0..1 */
-  opacity: number;
-  font: string;
-}
+export interface AurumTextLayer extends TextLayerState {}
 
 const TEXT_FONTS: { id: string; label: string; stack: string }[] = [
   { id: 'sys', label: 'San', stack: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif" },
@@ -815,6 +848,7 @@ const TEXT_FONTS: { id: string; label: string; stack: string }[] = [
 function defaultTextLayer(): AurumTextLayer {
   const id = `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
   return {
+    kind: 'text',
     id,
     text: '',
     x: 0.5,
@@ -978,7 +1012,6 @@ export class AurumEditor extends AurumCore {
   private chipsEl!: HTMLElement;
   private scrimEl!: HTMLElement;
   private cropResetBtn!: HTMLButtonElement;
-  private adjustValue!: HTMLButtonElement;
   private autoBtn!: HTMLButtonElement;
   private autoLabel!: HTMLElement;
   private aiAction?: AIAction;
@@ -995,7 +1028,6 @@ export class AurumEditor extends AurumCore {
   private peekCanvas: HTMLCanvasElement | null = null;
   private peekOn = false;
   private peekSavedState: EditorState | null = null;
-  private paramsEl!: HTMLElement;
   private filterWrap!: HTMLElement;
   private filterCats!: HTMLElement;
   private filterCat: PresetCategory | 'all' = 'all';
@@ -1131,12 +1163,11 @@ export class AurumEditor extends AurumCore {
   private currentTab: TabId = 'adjust';
   private cropMode: CropMode = 'ratio';
   private lastAspect: AspectId | null = null;
-  private adjustKey: keyof Adjustments = 'brightness';
+  private decks = new Map<TabId, ParamDeck>();
   private liquifyOn = false;
   private liquifySize = 5;
   private liquifyGesture = 0;
   private liquifyButton: HTMLButtonElement | null = null;
-  private adjustContext: HTMLElement | null = null;
   private liquifyContext: HTMLElement | null = null;
   private liquifyTicks: TickControl | null = null;
   private liquifyValue: HTMLButtonElement | null = null;
@@ -1164,11 +1195,9 @@ export class AurumEditor extends AurumCore {
   private panes = new Map<TabId, HTMLElement>();
   private aspectButtons = new Map<AspectId, HTMLButtonElement>();
   private flipButtons = new Map<'flipH' | 'flipV', HTMLButtonElement>();
-  private adjustButtons = new Map<keyof Adjustments, HTMLButtonElement>();
   private filterButtons = new Map<string, HTMLButtonElement>();
   private formatButtons = new Map<ExportMime, HTMLButtonElement>();
   private rotationControl!: TickControl;
-  private adjustTicks!: TickControl;
   private qualityControl!: TickControl;
 
   constructor(options: AurumUIOptions) {
@@ -1516,6 +1545,7 @@ export class AurumEditor extends AurumCore {
       pane.setAttribute('aria-labelledby', tabId);
       if (tab.id === 'crop') this.buildCropPane(pane);
       if (tab.id === 'adjust') this.buildAdjustPane(pane);
+      if (tab.id === 'portrait') this.buildPortraitPane(pane);
       if (tab.id === 'filter') this.buildFilterPane(pane);
       if (tab.id === 'text') this.buildTextPane(pane);
       if (tab.id === 'ai') this.buildAIPane(pane);
@@ -1757,8 +1787,6 @@ export class AurumEditor extends AurumCore {
   }
 
   private buildAdjustPane(pane: HTMLElement): void {
-    const top = el('div', 'au-deck__row au-deck__row--top au-deck__row--adjust');
-
     // Auto is an action, not a slider: keep it fixed while the parameter rail
     // scrolls underneath. It only writes scalar sliders, so the result stays
     // undoable and every value can still be tuned by hand.
@@ -1771,11 +1799,51 @@ export class AurumEditor extends AurumCore {
     this.autoLabel.textContent = this.s.auto;
     this.autoBtn.addEventListener('click', () => void this.runAuto());
 
+    this.buildParamDeck(pane, 'adjust', ADJUST_GROUPS, { header: this.autoBtn });
+  }
+
+  private buildPortraitPane(pane: HTMLElement): void {
+    // One-tap chains first: Xingtu treats "一键美颜" as the entry point of the
+    // portrait tab, not as a hidden action. The chips apply a chain from the
+    // shared spec and leave every slider tweakable afterwards.
+    const presets: HTMLElement[] = [];
+    for (const preset of CHAIN_PRESETS) {
+      if (preset.when && preset.when !== 'portrait') continue;
+      const button = el('button', 'au-param au-param--preset');
+      button.type = 'button';
+      button.dataset.chain = preset.id;
+      const name = this.locale === 'en' ? preset.nameEn || preset.name : preset.name;
+      button.textContent = name;
+      button.title = name;
+      button.setAttribute('aria-label', name);
+      button.addEventListener('click', () => this.applyChainPreset(preset));
+      presets.push(button);
+    }
+    this.buildParamDeck(pane, 'portrait', PORTRAIT_GROUPS, {
+      lead: presets,
+      liquify: true,
+    });
+  }
+
+  /**
+   * Shared parameter deck: one chip rail, one value ruler and one reset
+   * readout per tab. `header` is a fixed action (Auto) and `lead` is a row of
+   * one-tap chain chips inserted before the first group.
+   */
+  private buildParamDeck(
+    pane: HTMLElement,
+    tab: TabId,
+    groups: { id: string; label: keyof UIStrings; keys: (keyof Adjustments)[] }[],
+    options: { header?: HTMLElement; lead?: HTMLElement[]; liquify?: boolean } = {},
+  ): ParamDeck {
+    const top = el('div', 'au-deck__row au-deck__row--top au-deck__row--adjust');
     const params = el('div', 'au-params');
-    this.paramsEl = params;
     params.setAttribute('role', 'group');
-    params.setAttribute('aria-label', this.s.adjustTitle);
-    for (const group of ADJUST_GROUPS) {
+    params.setAttribute('aria-label', tab === 'portrait' ? this.s.portraitTitle : this.s.adjustTitle);
+    for (const chip of options.lead ?? []) params.appendChild(chip);
+
+    const buttons = new Map<keyof Adjustments, HTMLButtonElement>();
+    for (const group of groups) {
       const sep = el('span', 'au-param-sep');
       sep.dataset.group = group.id;
       const label = el('b');
@@ -1788,11 +1856,13 @@ export class AurumEditor extends AurumCore {
         button.dataset.adjust = key;
         button.textContent = this.s[ADJUST_SHORT[key]];
         button.setAttribute('aria-pressed', 'false');
-        button.addEventListener('click', () => this.selectAdjust(key));
-        this.adjustButtons.set(key, button);
+        button.addEventListener('click', () => {
+          if (deck) this.selectParam(deck, key);
+        });
+        buttons.set(key, button);
         params.appendChild(button);
       }
-      if (group.id === 'shape') {
+      if (options.liquify && group.id === 'shape') {
         const liquify = el('button', 'au-param au-param--liquify');
         liquify.type = 'button';
         liquify.title = this.s.liquifyTitle;
@@ -1805,16 +1875,17 @@ export class AurumEditor extends AurumCore {
       }
     }
 
-    this.adjustValue = el('button', 'au-value au-glass au-glass--gold');
-    this.adjustValue.type = 'button';
-    this.adjustValue.addEventListener('click', () => this.resetAdjust(this.adjustKey));
-    top.append(this.autoBtn, params, this.adjustValue);
+    const value = el('button', 'au-value au-glass au-glass--gold');
+    value.type = 'button';
+    top.append(...(options.header ? [options.header] : []), params, value);
     pane.appendChild(top);
 
     const context = el('div', 'au-deck__row au-deck__row--context');
-    this.adjustContext = context;
-    this.adjustTicks = this.makeTicks({
-      label: this.s[this.adjustKey],
+    // The tick builder formats its initial value synchronously, before the
+    // deck object exists, so the callbacks read a mutable reference.
+    let deck: ParamDeck | null = null;
+    const ticks = this.makeTicks({
+      label: this.s[groups[0].keys[0]],
       min: -100,
       max: 100,
       step: 1,
@@ -1823,41 +1894,90 @@ export class AurumEditor extends AurumCore {
       zero: true,
       head: false,
       ruler: true,
-      format: (value) => this.formatAdjust(value),
-      onInput: (value) => this.setAdjust(this.adjustKey, value),
+      format: (input) => this.formatAdjust(input, deck?.key ?? groups[0].keys[0]),
+      onInput: (input) => {
+        if (deck) this.setAdjust(deck.key, input);
+      },
     });
-    context.appendChild(this.adjustTicks.row);
+    context.appendChild(ticks.row);
     pane.appendChild(context);
 
-    // Liquify replaces the value ruler with a brush-size ruler. Same height,
-    // so entering the mode cannot resize the stage or move the photo.
-    const liquifyContext = el('div', 'au-deck__row au-deck__row--context au-liquify-row');
-    liquifyContext.style.display = 'none';
-    this.liquifyContext = liquifyContext;
-    this.liquifyTicks = this.makeTicks({
-      label: this.s.brushSize,
-      min: 1,
-      max: 20,
-      step: 1,
-      tickStep: 1,
-      defaultValue: this.liquifySize,
-      head: false,
-      ruler: false,
-      format: (value) => `${Math.round(value)}%`,
-      onInput: (value) => this.setLiquifySize(value, false),
-      onReset: () => this.setLiquifySize(5),
-    });
-    this.liquifyValue = el('button', 'au-value au-glass au-glass--gold');
-    this.liquifyValue.type = 'button';
-    this.liquifyValue.textContent = `${this.liquifySize}%`;
-    this.liquifyValue.title = `${this.s.reset}: ${this.s.brushSize}`;
-    this.liquifyValue.setAttribute('aria-label', `${this.s.reset}: ${this.s.brushSize}`);
-    this.liquifyValue.addEventListener('click', () => this.setLiquifySize(5));
-    const clear = iconButton('reset', this.s.clearLiquify, () => this.clearLiquifyDabs());
-    clear.classList.add('au-reset');
-    liquifyContext.append(this.liquifyTicks.row, this.liquifyValue, clear);
-    pane.appendChild(liquifyContext);
-    this.selectAdjust(this.adjustKey);
+    const created: ParamDeck = {
+      tab,
+      key: groups[0].keys[0],
+      buttons,
+      params,
+      ticks,
+      context,
+      value,
+    };
+    deck = created;
+    value.addEventListener('click', () => this.resetAdjust(created.key));
+    this.decks.set(tab, created);
+
+    if (options.liquify) {
+      // Liquify replaces the value ruler with a brush-size ruler. Same height,
+      // so entering the mode cannot resize the stage or move the photo.
+      const liquifyContext = el('div', 'au-deck__row au-deck__row--context au-liquify-row');
+      liquifyContext.style.display = 'none';
+      this.liquifyContext = liquifyContext;
+      this.liquifyTicks = this.makeTicks({
+        label: this.s.brushSize,
+        min: 1,
+        max: 20,
+        step: 1,
+        tickStep: 1,
+        defaultValue: this.liquifySize,
+        head: false,
+        ruler: false,
+        format: (input) => `${Math.round(input)}%`,
+        onInput: (input) => this.setLiquifySize(input, false),
+        onReset: () => this.setLiquifySize(5),
+      });
+      this.liquifyValue = el('button', 'au-value au-glass au-glass--gold');
+      this.liquifyValue.type = 'button';
+      this.liquifyValue.textContent = `${this.liquifySize}%`;
+      this.liquifyValue.title = `${this.s.reset}: ${this.s.brushSize}`;
+      this.liquifyValue.setAttribute('aria-label', `${this.s.reset}: ${this.s.brushSize}`);
+      this.liquifyValue.addEventListener('click', () => this.setLiquifySize(5));
+      const clear = iconButton('reset', this.s.clearLiquify, () => this.clearLiquifyDabs());
+      clear.classList.add('au-reset');
+      liquifyContext.append(this.liquifyTicks.row, this.liquifyValue, clear);
+      pane.appendChild(liquifyContext);
+    }
+
+    this.selectParam(created, created.key);
+    return created;
+  }
+
+  private presetName(preset: ChainPreset): string {
+    return this.locale === 'en' ? preset.nameEn || preset.name : preset.name;
+  }
+
+  /** Apply a one-tap chain: only the keys in the spec are written. */
+  private applyChainPreset(preset: ChainPreset): void {
+    if (!this.isReady) return;
+    if (this.liquifyOn) this.setLiquify(false);
+    const current = this.getState();
+    const adjust = { ...current.adjust };
+    const strengths: Record<string, number> = {};
+    for (const [key, input] of Object.entries(preset.chain.adjust ?? {})) {
+      if (!(key in ADJUST_RANGES) || typeof input !== 'number' || !Number.isFinite(input)) continue;
+      const id = key as keyof Adjustments;
+      const [min, max] = ADJUST_RANGES[id];
+      adjust[id] = clamp(input, min, max);
+      strengths[id] = adjust[id];
+    }
+    const filter = preset.chain.filter;
+    const next: EditorState = {
+      ...current,
+      adjust,
+      filter: filter && PRESETS.some((entry) => entry.id === filter) ? filter : current.filter,
+      chain: { id: preset.id, strengths },
+    };
+    this.setState(next);
+    this.syncUI();
+    this.toast(`${this.s.beautyApplied}: ${this.presetName(preset)}`);
   }
 
   private buildFilterPane(pane: HTMLElement): void {
@@ -4003,6 +4123,39 @@ export class AurumEditor extends AurumCore {
   }
 
   // -------------------------------------------------------------------- text
+
+  /**
+   * State v2: the layer array travels with the edit state so hosts can save,
+   * restore and mirror it in the Swift client. While the editor is open the
+   * live DOM nodes stay the source of truth; `getState` snapshots them into
+   * the core state, and `setState` rebuilds the nodes from a restored state.
+   */
+  override getState(): EditorState {
+    const state = super.getState();
+    state.layers = this.texts.map((layer) => ({ ...layer }));
+    return state;
+  }
+
+  override setState(input: unknown, options: SetStateOptions = {}): void {
+    super.setState(input, options);
+    this.applyTextLayers(super.getState().layers);
+  }
+
+  private applyTextLayers(layers: LayerState[]): void {
+    this.texts = layers
+      .filter((layer): layer is TextLayerState => layer.kind === 'text')
+      .map((layer) => ({ ...layer }));
+    this.selectedTextId = this.texts[0]?.id ?? null;
+    if (!this.textLayer) return;
+    this.textLayer.textContent = '';
+    for (const layer of this.texts) {
+      this.textLayer.appendChild(this.createTextNode(layer));
+    }
+    this.positionTexts();
+    const first = this.texts[0];
+    if (first) this.syncTextControls(first);
+  }
+
   private selectedLayer(): AurumTextLayer | undefined {
     return this.texts.find((t) => t.id === this.selectedTextId);
   }
@@ -4883,7 +5036,7 @@ export class AurumEditor extends AurumCore {
   }
 
   private setTab(tab: TabId): void {
-    if (tab !== 'adjust') this.setLiquify(false);
+    if (tab !== 'portrait') this.setLiquify(false);
     if (tab !== 'text' && this.textPlacing) {
       this.textPlacing = false;
       this.textPlaceBtn?.setAttribute('aria-pressed', 'false');
@@ -5091,14 +5244,15 @@ export class AurumEditor extends AurumCore {
     this.liquifyOn = on;
     this.root.classList.toggle('au-liquify', on);
     this.liquifyButton?.setAttribute('aria-pressed', String(on));
-    if (this.adjustContext) this.adjustContext.style.display = on ? 'none' : '';
+    const portrait = this.decks.get('portrait');
+    if (portrait) portrait.context.style.display = on ? 'none' : '';
     if (this.liquifyContext) this.liquifyContext.style.display = on ? '' : 'none';
     this.stage.style.cursor = on ? 'crosshair' : 'grab';
     if (on) {
       this.liquifyTicks?.set(this.liquifySize, false);
       if (this.liquifyValue) this.liquifyValue.textContent = `${this.liquifySize}%`;
-      if (this.liquifyButton) {
-        window.requestAnimationFrame(() => this.centerAdjustChip(this.liquifyButton!));
+      if (this.liquifyButton && portrait) {
+        window.requestAnimationFrame(() => this.centerAdjustChip(this.liquifyButton!, portrait));
       }
     } else {
       this.liquifyStroke = null;
@@ -5227,30 +5381,30 @@ export class AurumEditor extends AurumCore {
     }
   };
 
-  private selectAdjust(key: keyof Adjustments): void {
+  private selectParam(deck: ParamDeck, key: keyof Adjustments): void {
     if (this.liquifyOn) this.setLiquify(false);
-    this.adjustKey = key;
-    for (const [id, button] of this.adjustButtons) {
+    deck.key = key;
+    for (const [id, button] of deck.buttons) {
       button.setAttribute('aria-pressed', String(id === key));
     }
     const [min, max] = ADJUST_RANGES[key];
-    this.adjustTicks.setRange(min, max, 1, 2, min < 0);
-    this.adjustTicks.setLabel(this.s[key]);
+    deck.ticks.setRange(min, max, 1, 2, min < 0);
+    deck.ticks.setLabel(this.s[key]);
     const value = this.isReady ? Math.round(this.getState().adjust[key]) : 0;
-    this.adjustTicks.set(value, false);
-    this.adjustValue.textContent = this.formatAdjust(value);
-    this.adjustValue.title = `${this.s.reset}: ${this.s[key]}`;
-    this.adjustValue.setAttribute('aria-label', `${this.s.reset}: ${this.s[key]}`);
-    const button = this.adjustButtons.get(key);
+    deck.ticks.set(value, false);
+    deck.value.textContent = this.formatAdjust(value, key);
+    deck.value.title = `${this.s.reset}: ${this.s[key]}`;
+    deck.value.setAttribute('aria-label', `${this.s.reset}: ${this.s[key]}`);
+    const button = deck.buttons.get(key);
     if (button) {
-      window.requestAnimationFrame(() => this.centerAdjustChip(button));
+      window.requestAnimationFrame(() => this.centerAdjustChip(button, deck));
     }
   }
 
-  /** Bring a tapped parameter chip under the middle of the rail. */
-  private centerAdjustChip(button: HTMLButtonElement): void {
-    const rail = this.paramsEl;
-    if (!rail || this.currentTab !== 'adjust') return;
+  /** Bring a tapped parameter chip under the middle of its own rail. */
+  private centerAdjustChip(button: HTMLButtonElement, deck: ParamDeck): void {
+    const rail = deck.params;
+    if (!rail || this.currentTab !== deck.tab) return;
     const rect = button.getBoundingClientRect();
     const railRect = rail.getBoundingClientRect();
     if (!rect.width || !railRect.width) return;
@@ -5280,8 +5434,8 @@ export class AurumEditor extends AurumCore {
     }
   }
 
-  private formatAdjust(value: number): string {
-    const [min] = ADJUST_RANGES[this.adjustKey];
+  private formatAdjust(value: number, key: keyof Adjustments = 'brightness'): string {
+    const [min] = ADJUST_RANGES[key];
     return min >= 0 ? String(Math.round(value)) : signed(Math.round(value));
   }
 
@@ -5405,10 +5559,11 @@ export class AurumEditor extends AurumCore {
     this.flipButtons.get('flipH')?.classList.toggle('is-on', state.transform.flipH);
     this.flipButtons.get('flipV')?.classList.toggle('is-on', state.transform.flipV);
 
-    const adjustValue = Math.round(state.adjust[this.adjustKey]);
-    if (active !== this.adjustTicks.rail) this.adjustTicks.set(adjustValue, false);
-    this.adjustValue.textContent = this.formatAdjust(adjustValue);
-
+    for (const deck of this.decks.values()) {
+      const adjustValue = Math.round(state.adjust[deck.key]);
+      if (active !== deck.ticks.rail) deck.ticks.set(adjustValue, false);
+      deck.value.textContent = this.formatAdjust(adjustValue, deck.key);
+    }
     const rotation = Math.round(state.transform.rotation);
     if (active !== this.rotationControl.rail) this.rotationControl.set(rotation, false);
     this.rotationValue.textContent = `${rotation}°`;

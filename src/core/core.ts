@@ -17,6 +17,7 @@ import type {
   HSLBandId,
   HSLBandState,
   ImageSource,
+  LayerState,
   LiquifyDab,
   LiquifyField,
   Point,
@@ -28,6 +29,7 @@ import {
   ADJUST_KEYS,
   ADJUST_RANGES,
   clamp,
+  cloneLayers,
   cloneState,
   defaultCrop,
   defaultCurves,
@@ -39,6 +41,7 @@ import {
   isAspect,
   normalizeCurve,
   normalizeEnhance,
+  normalizeLayers,
   normalizeState,
 } from './state';
 import { History } from './history';
@@ -678,7 +681,7 @@ export class AurumCore {
   }
 
   exportState(): string {
-    return JSON.stringify({ version: 1, state: this.getState() }, null, 2);
+    return JSON.stringify({ version: 2, state: this.getState() }, null, 2);
   }
 
   importState(value: string | object): void {
@@ -687,6 +690,28 @@ export class AurumCore {
       ? (parsed as { state: unknown }).state
       : parsed;
     this.setState(state);
+  }
+
+  /* --------------------------------------------------------------- layers */
+
+  /**
+   * Composed layers are part of the edit state (state v2): the host UI draws
+   * them, the headless core carries them through save/restore, and the Swift
+   * client renders the same layout from the same numbers.
+   */
+  getLayers(): LayerState[] {
+    return cloneLayers(this.state.layers || []);
+  }
+
+  setLayers(input: unknown, options: SetStateOptions = {}): void {
+    this.state.layers = normalizeLayers(input);
+    if (options.history !== false) {
+      this.history.push(this.state, 'layers');
+    }
+    if (!options.silent) {
+      this.emitState();
+      this.emitHistory();
+    }
   }
 
   setAdjust(key: keyof EditorState['adjust'], value: number, coalesce?: string): void {

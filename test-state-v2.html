@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Aurum state v2 test</title>
+<style>
+  body { margin: 0; padding: 16px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  .host { width: 64px; height: 64px; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+  .pass { color: #7ee787; }
+  .fail { color: #ff7b72; }
+  .summary { font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="host" class="host"></div>
+<pre id="log">Running…</pre>
+<script type="module">
+import {
+  MAX_LAYERS,
+  cloneState,
+  createCore,
+  defaultState,
+  normalizeChain,
+  normalizeLayers,
+  normalizeState,
+} from './dist/aurum.esm.js?v=20261116a';
+
+const log = document.getElementById('log');
+const lines = [];
+let passes = 0;
+const failures = [];
+
+function out(text, cls = '') {
+  lines.push(cls ? `<span class="${cls}">${text}</span>` : text);
+  log.innerHTML = lines.join('\n');
+}
+
+function ok(name, condition, detail = '') {
+  if (condition) {
+    passes += 1;
+    out(`PASS ${name}${detail ? ` — ${detail}` : ''}`, 'pass');
+  } else {
+    failures.push(name);
+    out(`FAIL ${name}${detail ? ` — ${detail}` : ''}`, 'fail');
+  }
+}
+
+function eq(name, actual, expected) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  ok(name, a === e, a === e ? '' : `got ${a}, want ${e}`);
+}
+
+function throws(name, fn) {
+  try { fn(); ok(name, false, 'did not throw'); }
+  catch { ok(name, true); }
+}
+
+const image = (() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const data = ctx.createImageData(64, 64);
+  for (let i = 0; i < data.data.length; i += 4) {
+    const x = (i / 4) % 64;
+    data.data[i] = x * 4;
+    data.data[i + 1] = 90;
+    data.data[i + 2] = 180;
+    data.data[i + 3] = 255;
+  }
+  ctx.putImageData(data, 0, 0);
+  return canvas;
+})();
+
+const ready = (core) => new Promise((resolve) => {
+  if (core.isReady) resolve();
+  else core.on('ready', resolve);
+});
+
+const textLayer = (overrides = {}) => ({
+  kind: 'text',
+  id: 'layer-1',
+  text: 'Xin chào',
+  x: 0.5,
+  y: 0.5,
+  size: 0.07,
+  color: '#ffffff',
+  bold: false,
+  italic: false,
+  outline: false,
+  shadow: true,
+  align: 'center',
+  rotation: 0,
+  opacity: 1,
+  font: 'sys',
+  ...overrides,
+});
+
+try {
+  /* ---------------------------------------------------------- 1. default v2 */
+  const base = defaultState();
+  eq('default version is 2', base.version, 2);
+  eq('default layers is empty array', base.layers, []);
+  eq('default chain absent', base.chain, undefined);
+  eq('default filter', base.filter, 'original');
+
+  /* ----------------------------------------------------- 2. v1 → v2 import */
+  const v1 = JSON.parse(JSON.stringify(base));
+  v1.version = 1;
+  delete v1.layers;
+  v1.filter = 'vivid';
+  v1.adjust.brightness = 20;
+  v1.adjust.skinTone = -12;
+  v1.enhance.curves.rgb = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.6 },
+    { x: 1, y: 1 },
+  ];
+  v1.retouch.liquify.push({ x: 0.5, y: 0.5, dx: 0.08, dy: -0.02, radius: 0.1 });
+  v1.someFutureKey = { ignore: true };
+
+  const migrated = normalizeState(v1);
+  eq('v1 migrates to version 2', migrated.version, 2);
+  eq('v1 keeps filter', migrated.filter, 'vivid');
+  eq('v1 keeps adjust', [migrated.adjust.brightness, migrated.adjust.skinTone], [20, -12]);
+  eq('v1 keeps curve points', migrated.enhance.curves.rgb.length, 3);
+  eq('v1 keeps liquify dab', migrated.retouch.liquify.length, 1);
+  eq('v1 gains empty layers', migrated.layers, []);
+  ok('v1 drops unknown top-level keys', !('someFutureKey' in migrated));
+
+  /* ------------------------------------------- 3. v2 round-trip + deep copy */
+  const v2 = normalizeState({
+    ...defaultState(),
+    filter: 'warm',
+    layers: [
+      textLayer({ id: 'title', text: 'Biển xanh', size: 0.09, color: '#00ccff' }),
+      textLayer({ id: 'note', text: 'Hè 2026', x: 0.2, y: 0.8, italic: true, rotation: -12 }),
+    ],
+    chain: { id: 'beauty-auto', strengths: { smoothSkin: 60, skinTone: 25 } },
+  });
+  const again = normalizeState(JSON.parse(JSON.stringify(v2)));
+  eq('v2 round-trip is byte stable', JSON.stringify(again), JSON.stringify(v2));
+  eq('v2 keeps chain', again.chain, { id: 'beauty-auto', strengths: { smoothSkin: 60, skinTone: 25 } });
+
+  const copy = cloneState(v2);
+  copy.layers[0].text = 'Đã sửa';
+  copy.chain.strengths.smoothSkin = 100;
+  eq('clone layers are independent', v2.layers[0].text, 'Biển xanh');
+  eq('clone chain is independent', v2.chain.strengths.smoothSkin, 60);
+
+  /* ------------------------------------------------ 4. hostile input sweep */
+  const dirty = normalizeState({
+    version: 2,
+    layers: [
+      null,
+      'not a layer',
+      42,
+      { kind: 'sticker', id: 's1' }, // unknown kind in v2.0: dropped, not guessed
+      {
+        kind: 'text',
+        id: 'bad id!',
+        text: 'x'.repeat(900),
+        x: -4,
+        y: 9,
+        size: 999,
+        color: 'red',
+        font: '../../etc/passwd',
+        align: 'justify',
+        rotation: 999,
+        opacity: -2,
+        bold: 'yes',
+        shadow: 'no',
+      },
+      textLayer({ id: 'good', text: 'Giữ nguyên', x: 0.25, y: 0.75, size: 0.05, color: '#ffcc00', font: 'serif', align: 'left', opacity: 0.5, shadow: false }),
+    ],
+    chain: { id: 'bad id', strengths: { smoothSkin: 10 } },
+  });
+
+  eq('dirty input keeps only valid text layers', dirty.layers.length, 2);
+  const [sane, good] = dirty.layers;
+  eq('fallback id is stable and safe', sane.id, 't4');
+  eq('x/y clamp to 0..1', [sane.x, sane.y], [0, 1]);
+  eq('size clamps to 0.01..0.5', sane.size, 0.5);
+  eq('invalid color falls back to white', sane.color, '#ffffff');
+  eq('path-like font falls back to sys', sane.font, 'sys');
+  eq('unknown align falls back to center', sane.align, 'center');
+  eq('rotation clamps to ±180', sane.rotation, 180);
+  eq('opacity clamps to 0..1', sane.opacity, 0);
+  eq('non-boolean flags fall back', [sane.bold, sane.shadow], [false, true]);
+  eq('text caps at 500 chars', sane.text.length, 500);
+  eq('clean layer preserved', [good.id, good.text, good.color, good.align, good.opacity, good.shadow], ['good', 'Giữ nguyên', '#ffcc00', 'left', 0.5, false]);
+  eq('invalid chain id is dropped', dirty.chain, undefined);
+
+  /* --------------------------------------------------- 5. cap and dedupe ids */
+  const many = Array.from({ length: 100 }, (_, i) => textLayer({ id: `l${i}`, text: `L${i}` }));
+  const capped = normalizeLayers(many);
+  eq('layer cap is 64', capped.length, MAX_LAYERS);
+  eq('cap keeps the newest layers', [capped[0].id, capped[capped.length - 1].id], ['l36', 'l99']);
+
+  const dupes = normalizeLayers([
+    textLayer({ id: 'dup' }),
+    textLayer({ id: 'dup' }),
+    textLayer({ id: 'dup-1' }),
+  ]);
+  eq('duplicate ids get unique suffixes', dupes.map((l) => l.id), ['dup', 'dup-1', 'dup-1-1']);
+  eq('non-array layers normalize to empty', normalizeLayers('nope'), []);
+
+  /* ---------------------------------------------------------------- 6. chain */
+  const chain = normalizeChain({
+    id: 'retouch-old-photo',
+    strengths: { denoise: 150, sharpen: -5, 'bad key': 30, tone: 'x', clarity: 12 },
+  });
+  eq('chain strengths clamp and filter', chain, {
+    id: 'retouch-old-photo',
+    strengths: { denoise: 100, sharpen: 0, clarity: 12 },
+  });
+  eq('chain without id is dropped', normalizeChain({ strengths: {} }), undefined);
+
+  /* ------------------------------------------ 7. core import/export envelope */
+  const core = createCore({
+    container: '#host',
+    image,
+    maxPreview: 64,
+    maxExport: 64,
+  });
+  await ready(core);
+  core.importState(JSON.stringify({ version: 1, state: v1 }));
+  eq('core importState v1 → v2', core.getState().version, 2);
+  eq('core importState keeps values', core.getState().filter, 'vivid');
+  eq('core importState starts with no layers', core.getState().layers, []);
+
+  core.setLayers([textLayer({ id: 'headline', text: 'Aurum' })]);
+  eq('core getLayers returns a copy', core.getLayers().length, 1);
+  const exported = JSON.parse(core.exportState());
+  eq('export envelope is version 2', exported.version, 2);
+  eq('export state is version 2', exported.state.version, 2);
+  eq('export carries layers', exported.state.layers.map((l) => l.id), ['headline']);
+
+  core.setState(normalizeState(defaultState()));
+  eq('setState clears layers', core.getState().layers, []);
+
+  /* ------------------------------------------------------------- summary */
+  out('');
+  if (failures.length) {
+    out(`FAILED ${failures.length} · PASSED ${passes}`, 'fail summary');
+    out(failures.join('\n'), 'fail');
+  } else {
+    out(`ALL PASS (${passes} checks)`, 'pass summary');
+  }
+} catch (error) {
+  out(`ERROR ${error && error.stack ? error.stack : error}`, 'fail');
+  out(`FAILED ${failures.length} · PASSED ${passes}`, 'fail summary');
+}
+</script>
+</body>
+</html>

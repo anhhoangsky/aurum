@@ -168,8 +168,52 @@ export interface LiquifyField {
   shift: number;
 }
 
+/**
+ * A text layer composed over the graded photo. Positions are fractions of the
+ * exported image, so a saved session reopens at any preview size and the
+ * Swift client can render the identical layout. `id` is stable for selection,
+ * reordering and future per-layer history.
+ */
+export interface TextLayerState {
+  kind: 'text';
+  id: string;
+  text: string;
+  /** Centre position in exported-image fractions (0..1). */
+  x: number;
+  y: number;
+  /** Font size as a fraction of the export height. */
+  size: number;
+  /** `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. */
+  color: string;
+  bold: boolean;
+  italic: boolean;
+  outline: boolean;
+  shadow: boolean;
+  align: 'left' | 'center' | 'right';
+  /** Rotation in degrees, -180..180. */
+  rotation: number;
+  /** Opacity 0..1. */
+  opacity: number;
+  /** Font id from the shared catalogue (sys, serif, mono, round, heavy…). */
+  font: string;
+}
+
+/** Layers composed over the photo. Sticker kind is added by C1. */
+export type LayerState = TextLayerState;
+
+/**
+ * One-tap chain applied from the shared preset catalogue. The chain is
+ * metadata only: the resulting values live in `adjust`/`filter`, so an older
+ * client that ignores `chain` still renders the right photo.
+ */
+export interface ChainState {
+  id: string;
+  /** Per-key strength overrides, 0..100. */
+  strengths: Record<string, number>;
+}
+
 export interface EditorState {
-  version: 1;
+  version: 2;
   transform: TransformState;
   crop: CropState;
   adjust: Adjustments;
@@ -177,6 +221,10 @@ export interface EditorState {
   enhance: EnhanceState;
   /** Geometry retouch data. Optional so older saved states still load. */
   retouch?: RetouchState;
+  /** Composed layers (text now, stickers later). Absent in v1 states. */
+  layers: LayerState[];
+  /** Optional one-tap chain that produced the current look. */
+  chain?: ChainState;
 }
 
 export interface Point {
