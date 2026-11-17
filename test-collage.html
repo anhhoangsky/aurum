@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum collage engine test</title>
+<style>
+  body { margin: 0; padding: 12px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  #stage { width: 390px; height: 390px; background: #000; display: none; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<canvas id="stage" width="200" height="200"></canvas>
+<pre id="log">Running…</pre>
+<script type="module">
+import {
+  COLLAGE_DEFAULT_GAP,
+  COLLAGE_LAYOUTS,
+  COLLAGE_MAX_GAP,
+  COLLAGE_MAX_RADIUS,
+  COLLAGE_MAX_ZOOM,
+  COLLAGE_MIN_CELLS,
+  COLLAGE_MAX_CELLS,
+  collageCellRects,
+  collageCover,
+  collageLayout,
+  collageLayoutsFor,
+  defaultCollageState,
+  normalizeCollageState,
+  renderCollage,
+} from './dist/aurum.esm.js?v=20261117d';
+
+const log = document.getElementById('log');
+const stage = document.getElementById('stage');
+const lines = [];
+let pass = 0;
+let fail = 0;
+
+function out(text) {
+  lines.push(text);
+  log.textContent = lines.join('\n');
+}
+function ok(label, condition, detail = '') {
+  if (condition) {
+    pass += 1;
+    out(`PASS ${label}${detail ? ` — ${detail}` : ''}`);
+  } else {
+    fail += 1;
+    out(`FAIL ${label}${detail ? ` — ${detail}` : ''}`);
+  }
+}
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+function near(a, b, eps = 1e-9) {
+  return Math.abs(a - b) <= eps;
+}
+function rectNear(rect, x, y, width, height, eps = 1e-9) {
+  return rect
+    && near(rect.x, x, eps)
+    && near(rect.y, y, eps)
+    && near(rect.width, width, eps)
+    && near(rect.height, height, eps);
+}
+function solid(color, width = 64, height = 64) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, width, height);
+  return canvas;
+}
+function pixel(canvas, x, y) {
+  const data = canvas
+    .getContext('2d', { willReadFrequently: true })
+    .getImageData(x, y, 1, 1).data;
+  return [data[0], data[1], data[2], data[3]];
+}
+function sameColor(got, [r, g, b], tol = 2) {
+  return Math.abs(got[0] - r) <= tol
+    && Math.abs(got[1] - g) <= tol
+    && Math.abs(got[2] - b) <= tol;
+}
+
+// ---------------------------------------------------------------- spec
+ok('19 layouts load from the shared spec', COLLAGE_LAYOUTS.length === 19);
+const ids = COLLAGE_LAYOUTS.map((layout) => layout.id);
+ok('layout ids are unique', new Set(ids).size === ids.length);
+let countsCovered = true;
+for (let count = COLLAGE_MIN_CELLS; count <= COLLAGE_MAX_CELLS; count += 1) {
+  if (collageLayoutsFor(count).length === 0) countsCovered = false;
+}
+ok(`layouts cover ${COLLAGE_MIN_CELLS}…${COLLAGE_MAX_CELLS} photos`, countsCovered);
+
+let cellCountsOk = true;
+let insideOk = true;
+let areaOk = true;
+let overlapOk = true;
+for (const layout of COLLAGE_LAYOUTS) {
+  if (layout.cellCount !== layout.cells.length) cellCountsOk = false;
+  if (layout.cellCount < COLLAGE_MIN_CELLS || layout.cellCount > COLLAGE_MAX_CELLS) {
+    cellCountsOk = false;
+  }
+  let area = 0;
+  for (const cell of layout.cells) {
+    if (
+      cell.x < -1e-12
+      || cell.y < -1e-12
+      || cell.x + cell.width > 1 + 1e-12
+      || cell.y + cell.height > 1 + 1e-12
+      || cell.width <= 0
+      || cell.height <= 0
+    ) {
+      insideOk = false;
+    }
+    area += cell.width * cell.height;
+  }
+  if (!near(area, 1, 1e-9)) areaOk = false;
+  for (let a = 0; a < layout.cells.length; a += 1) {
+    for (let b = a + 1; b < layout.cells.length; b += 1) {
+      const one = layout.cells[a];
+      const two = layout.cells[b];
+      const width = Math.min(one.x + one.width, two.x + two.width) - Math.max(one.x, two.x);
+      const height = Math.min(one.y + one.height, two.y + two.height) - Math.max(one.y, two.y);
+      if (width > 1e-12 && height > 1e-12) overlapOk = false;
+    }
+  }
+}
+ok('every layout has the declared cell count', cellCountsOk);
+ok('every cell stays inside the frame', insideOk);
+ok('every layout covers the frame exactly', areaOk);
+ok('no two cells of a layout overlap', overlapOk);
+ok('nine-grid resolves with 9 cells', collageLayout('nine-grid')?.cells.length === 9);
+ok('a layout name built from another name is unknown', collageLayout('nine-grid-2') === null);
+ok('three-photo layouts return 4 options', collageLayoutsFor(3).length === 4);
+ok('one photo has no layout', collageLayoutsFor(1).length === 0);
+
+// ---------------------------------------------------------------- gap
+const duoNone = collageCellRects('duo-split', 0);
+ok('gap 0 restores the raw spec rects', rectNear(duoNone[0], 0, 0, 0.5, 1));
+const duoGap = collageCellRects('duo-split', 0.04);
+ok('the outer border is one gap wide', rectNear(duoGap[0], 0.04, 0.04, 0.44, 0.92));
+ok('the gutter between cells is one gap wide', near(duoGap[1].x - (duoGap[0].x + duoGap[0].width), 0.04));
+ok('the shared gutter never changes the far edge', near(duoGap[1].x + duoGap[1].width, 0.96));
+const duoWide = collageCellRects('duo-split', 1);
+ok('the gap clamps to the spec maximum', near(duoWide[0].width, 0.5 * (1 - COLLAGE_MAX_GAP) - COLLAGE_MAX_GAP));
+ok('a negative gap clamps to 0', rectNear(collageCellRects('duo-split', -2)[0], 0, 0, 0.5, 1));
+ok('a NaN gap clamps to 0', rectNear(collageCellRects('duo-split', NaN)[0], 0, 0, 0.5, 1));
+ok('an unknown layout has no rects', collageCellRects('missing', 0).length === 0);
+const trio = collageCellRects('trio-columns', 0);
+ok('a three-column layout splits into equal thirds', [0, 1, 2].every((index) => near(trio[index].width, 1 / 3, 1e-9)));
+const quadLeft = collageCellRects('quad-left', 0);
+ok('the stacked side of quad-left has equal rows', near(quadLeft[1].height, 1 / 3, 1e-9) && near(quadLeft[3].height, 1 / 3, 1e-9));
+const nine = collageCellRects('nine-grid', 0.03);
+ok('the nine-grid keeps equal columns under a gap', near(nine[0].width, nine[1].width, 1e-9) && near(nine[1].width, nine[2].width, 1e-9));
+ok('the nine-grid keeps equal rows under a gap', near(nine[0].height, nine[3].height, 1e-9));
+
+// ---------------------------------------------------------------- state
+const base = defaultCollageState('duo-split');
+ok('the default document has one source per cell', base.cells.length === 2 && base.cells[0].source === 0 && base.cells[1].source === 1);
+ok('the default gap comes from the spec', near(base.gap, COLLAGE_DEFAULT_GAP));
+ok('an unknown default layout falls back to the first', defaultCollageState('nope').layout === COLLAGE_LAYOUTS[0].id);
+const empty = normalizeCollageState(null);
+ok('an empty document keeps the first layout', empty.layout === COLLAGE_LAYOUTS[0].id && empty.cells.length === 2);
+const four = normalizeCollageState({ layout: 'missing', cells: [{}, {}, {}, {}] });
+ok('an unknown layout keeps a matching cell count', four.cells.length === 4 && (collageLayout(four.layout)?.cellCount ?? 0) === 4);
+const padded = normalizeCollageState({ layout: 'nine-grid', cells: [{ source: 7 }] });
+ok('a short cell list is padded to the layout', padded.cells.length === 9 && padded.cells[0].source === 7 && padded.cells[8].source === 8);
+const trimmed = normalizeCollageState({ layout: 'duo-split', cells: [{}, {}, {}, {}, {}] });
+ok('extra cells are trimmed to the layout', trimmed.cells.length === 2);
+const clamped = normalizeCollageState({
+  layout: 'duo-split',
+  gap: 9,
+  radius: 9,
+  background: '#AbC',
+  cells: [
+    { source: -3, zoom: 0.2, offsetX: -8, offsetY: 8 },
+    { source: 2.9, zoom: 9, offsetX: 8, offsetY: -8 },
+  ],
+});
+ok('zoom clamps to the 1…4 range', clamped.cells[0].zoom === 1 && clamped.cells[1].zoom === COLLAGE_MAX_ZOOM);
+ok('the pan offsets clamp to ±1', clamped.cells[0].offsetX === -1 && clamped.cells[0].offsetY === 1 && clamped.cells[1].offsetX === 1);
+ok('the source index is a whole photo index', clamped.cells[0].source === 0 && clamped.cells[1].source === 2);
+ok('the gap and radius clamp to the spec', near(clamped.gap, COLLAGE_MAX_GAP) && near(clamped.radius, COLLAGE_MAX_RADIUS));
+ok('a short background expands to six digits', clamped.background === '#aabbcc');
+ok('an invalid background falls back to white', normalizeCollageState({ background: 'red' }).background === '#ffffff');
+
+// ---------------------------------------------------------------- cover
+const square = { width: 100, height: 100 };
+const wideCover = collageCover(square, { width: 200, height: 100 });
+ok('a square into a wide cell crops the height', near(wideCover.sw, 100) && near(wideCover.sh, 50) && near(wideCover.sy, 25));
+ok('the cover box always fills the cell', wideCover.dw >= 200 && wideCover.dh >= 100);
+const zoomed = collageCover(square, { width: 200, height: 100 }, { zoom: 2, offsetX: 0, offsetY: 0 });
+ok('zoom 2 halves the sampled source', near(zoomed.sw, 50) && near(zoomed.sh, 25));
+const left = collageCover({ width: 100, height: 100 }, { width: 100, height: 200 }, { zoom: 1, offsetX: -1, offsetY: 0 });
+const right = collageCover({ width: 100, height: 100 }, { width: 100, height: 200 }, { zoom: 1, offsetX: 1, offsetY: 0 });
+ok('a negative pan reaches the left source edge', near(left.sx, 0));
+ok('a positive pan reaches the right source edge', near(right.sx, 100 - right.sw));
+const top = collageCover({ width: 100, height: 200 }, { width: 100, height: 100 }, { zoom: 1, offsetX: 0, offsetY: -1 });
+const bottom = collageCover({ width: 100, height: 200 }, { width: 100, height: 100 }, { zoom: 1, offsetX: 0, offsetY: 1 });
+ok('the vertical pan reaches both source edges', near(top.sy, 0) && near(bottom.sy, 200 - bottom.sh));
+const portrait = collageCover({ width: 50, height: 100 }, { width: 200, height: 100 });
+ok('a portrait source keeps its full width in a wide cell', near(portrait.sw, 50) && near(portrait.sh, 25) && near(portrait.sy, 37.5));
+const lowZoom = collageCover(square, { width: 200, height: 100 }, { zoom: 0.1, offsetX: 0, offsetY: 0 });
+ok('a zoom below 1 clamps to cover', near(lowZoom.sw, 100) && near(lowZoom.sh, 50));
+ok('a degenerate source has no cover box', collageCover({ width: 0, height: 0 }, { width: 10, height: 10 }).sw === 0);
+
+// ---------------------------------------------------------------- render
+const bg = '#101010';
+function paint(state, sources, size) {
+  stage.width = size;
+  stage.height = size;
+  const ctx = stage.getContext('2d', { willReadFrequently: true });
+  const normalized = renderCollage(ctx, state, sources, { size });
+  return { ctx, normalized };
+}
+const red = solid('#ff0000');
+const green = solid('#00ff00');
+const split = paint({ layout: 'duo-split', gap: 0, radius: 0, background: bg }, [red, green], 128);
+ok('the left cell receives the first source', sameColor(pixel(stage, 32, 64), [255, 0, 0]));
+ok('the right cell receives the second source', sameColor(pixel(stage, 96, 64), [0, 255, 0]));
+ok('the renderer reports the normalized document', split.normalized.layout === 'duo-split' && split.normalized.cells.length === 2);
+const gapped = paint({ layout: 'duo-split', gap: 0.1, radius: 0, background: bg }, [red, green], 200);
+ok('the outer border shows the background', sameColor(pixel(stage, 2, 100), [16, 16, 16]));
+ok('the gutter shows the background', sameColor(pixel(stage, 100, 100), [16, 16, 16]));
+ok('the cells still reach the inner area', sameColor(pixel(stage, 50, 100), [255, 0, 0]) && sameColor(pixel(stage, 150, 100), [0, 255, 0]));
+const round = paint({ layout: 'duo-split', gap: 0, radius: 0.5, background: bg }, [red], 200);
+ok('a rounded corner reveals the background', sameColor(pixel(stage, 1, 1), [16, 16, 16]));
+ok('the rounded cell keeps its centre', sameColor(pixel(stage, 50, 100), [255, 0, 0]));
+const missing = paint({ layout: 'duo-split', gap: 0, radius: 0, background: bg }, [], 64);
+ok('a missing source leaves the background', sameColor(pixel(stage, 32, 32), [16, 16, 16]));
+const palette = ['#e63946', '#f1faee', '#a8dadc', '#457b9d', '#1d3557', '#ffb703', '#fb8500', '#8338ec', '#3a86ff'];
+const nineSources = palette.map((color) => solid(color));
+const grid = paint({ layout: 'nine-grid', gap: 0, radius: 0, background: bg }, nineSources, 180);
+let centersOk = true;
+for (let index = 0; index < 9; index += 1) {
+  const x = 30 + (index % 3) * 60;
+  const y = 30 + Math.floor(index / 3) * 60;
+  const value = parseInt(palette[index].slice(1), 16);
+  if (!sameColor(pixel(stage, x, y), [(value >> 16) & 255, (value >> 8) & 255, value & 255])) {
+    centersOk = false;
+  }
+}
+ok('all nine cells receive their own source', centersOk);
+ok('the nine-grid normalized gap stays at 0', grid.normalized.gap === 0);
+
+out(`\n${pass} passed, ${fail} failed — ${fail === 0 ? 'ALL PASS' : 'FAILED'}`);
+document.title = `${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail}`;
+</script>
+</body>
+</html>

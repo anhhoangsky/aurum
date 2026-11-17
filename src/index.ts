@@ -57,6 +57,32 @@ export {
   effectGeometry,
   normalizeEffectState,
 } from './core/effects';
+export {
+  COLLAGE_DEFAULT_BACKGROUND,
+  COLLAGE_DEFAULT_GAP,
+  COLLAGE_LAYOUTS,
+  COLLAGE_MAX_CELLS,
+  COLLAGE_MAX_GAP,
+  COLLAGE_MAX_RADIUS,
+  COLLAGE_MAX_ZOOM,
+  COLLAGE_MIN_CELLS,
+  collageCellRects,
+  collageCover,
+  collageLayout,
+  collageLayoutsFor,
+  defaultCollageState,
+  normalizeCollageState,
+  renderCollage,
+} from './core/collage';
+export type {
+  CollageCellState,
+  CollageCover,
+  CollageLayout,
+  CollageRect,
+  CollageRenderOptions,
+  CollageSource,
+  CollageState,
+} from './core/collage';
 export { analyzeBitmap, autoAdjust } from './core/enhance/analyze';
 export {
   CURVE_PRESETS,
