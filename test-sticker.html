@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum sticker layer test</title>
+<style>
+  body { margin: 0; padding: 12px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  #host { width: 390px; height: 640px; position: relative; background: #000; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<pre id="log">Running…</pre>
+<script type="module">
+import {
+  createEditor,
+  defaultState,
+  normalizeLayers,
+  normalizeState,
+  cloneLayers,
+  sanitizeStickerGlyph,
+  MAX_STICKER_CODE_POINTS,
+  MAX_LAYERS,
+} from './dist/aurum.esm.js?v=20261117c';
+
+const log = document.getElementById('log');
+const lines = [];
+let pass = 0;
+let fail = 0;
+
+function out(s) {
+  lines.push(s);
+  log.textContent = lines.join('\n');
+}
+function ok(label, condition, detail = '') {
+  if (condition) {
+    pass += 1;
+    out(`PASS ${label}${detail ? ` — ${detail}` : ''}`);
+  } else {
+    fail += 1;
+    out(`FAIL ${label}${detail ? ` — ${detail}` : ''}`);
+  }
+}
+
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+function sourceCanvas() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, 512, 512);
+  return canvas;
+}
+
+async function readBlob(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  bitmap.close();
+  return { width: canvas.width, height: canvas.height, data };
+}
+
+function pixelAt(img, x, y) {
+  const i = (Math.round(y) * img.width + Math.round(x)) * 4;
+  return [img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]];
+}
+
+function changedInBox(img, cx, cy, half, threshold = 18) {
+  let count = 0;
+  const x0 = Math.max(0, Math.round(cx - half));
+  const x1 = Math.min(img.width - 1, Math.round(cx + half));
+  const y0 = Math.max(0, Math.round(cy - half));
+  const y1 = Math.min(img.height - 1, Math.round(cy + half));
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
+      const [r, g, b] = pixelAt(img, x, y);
+      if (r + g + b > threshold) count += 1;
+    }
+  }
+  return count;
+}
+
+const settle = (ms = 140) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function pointer(node, type, x, y, id = 1) {
+  node.dispatchEvent(new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX: x,
+    clientY: y,
+    pointerId: id,
+    pointerType: 'touch',
+    isPrimary: id === 1,
+  }));
+}
+
+/* ------------------------------------------------------------ state tests */
+try {
+  // v2.0 text layer without kind still loads as text.
+  const legacy = normalizeLayers([{ id: 'old', text: 'Xin chào', font: 'sys' }]);
+  ok('missing kind loads as text',
+    legacy.length === 1 && legacy[0].kind === 'text' && legacy[0].text === 'Xin chào');
+
+  const sticker = normalizeLayers([{ kind: 'sticker', id: 's1', glyph: '🔥' }])[0];
+  ok('sticker defaults are stable',
+    sticker.kind === 'sticker' &&
+    sticker.x === 0.5 && sticker.y === 0.5 &&
+    sticker.size === 0.24 && sticker.rotation === 0 && sticker.opacity === 1,
+    JSON.stringify(sticker));
+
+  const family = '👨‍👩‍👧‍👦';
+  const tone = normalizeLayers([{ kind: 'sticker', glyph: '👍🏽' }])[0];
+  const heart = normalizeLayers([{ kind: 'sticker', glyph: '❤️' }])[0];
+  ok('ZWJ family survives normalise',
+    normalizeLayers([{ kind: 'sticker', glyph: family }])[0].glyph === family);
+  ok('skin tone survives normalise', tone.glyph === '👍🏽', tone.glyph);
+  ok('variation selector survives normalise', heart.glyph === '❤️',
+    Array.from(heart.glyph).map((c) => c.codePointAt(0).toString(16)).join(' '));
+
+  const dirty = sanitizeStickerGlyph('😀\u0000\n😎\u007f');
+  ok('control characters are stripped', dirty === '😀😎', JSON.stringify(dirty));
+  ok('lone surrogates are dropped', sanitizeStickerGlyph('\ud83d') === '');
+  const longGlyph = sanitizeStickerGlyph('😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀');
+  ok('glyph caps at 16 code points',
+    Array.from(longGlyph).length === MAX_STICKER_CODE_POINTS,
+    `${Array.from(longGlyph).length} cp`);
+
+  const dropped = normalizeLayers([
+    { kind: 'sticker', glyph: '' },
+    { kind: 'sticker', glyph: '   ' },
+    { kind: 'draw', id: 'x' },
+    null,
+  ]);
+  ok('empty or unknown layers are dropped', dropped.length === 0, `kept=${dropped.length}`);
+
+  const clamped = normalizeLayers([{
+    kind: 'sticker', id: 's2', glyph: '⭐',
+    x: 9, y: -3, size: 7, rotation: 999, opacity: -2,
+  }])[0];
+  ok('sticker numbers are clamped',
+    clamped.x === 1 && clamped.y === 0 && clamped.size === 1 &&
+    clamped.rotation === 180 && clamped.opacity === 0,
+    JSON.stringify(clamped));
+
+  const mixed = normalizeLayers([
+    { kind: 'text', id: 'dup', text: 'a' },
+    { kind: 'sticker', id: 'dup', glyph: '🎉' },
+    { kind: 'sticker', id: 'dup', glyph: '🎀' },
+  ]);
+  ok('mixed order is preserved and duplicate ids are suffixed',
+    mixed.length === 3 && mixed[0].kind === 'text' &&
+    mixed[1].kind === 'sticker' && mixed[1].id === 'dup-1' &&
+    mixed[2].id === 'dup-2',
+    mixed.map((l) => `${l.kind}:${l.id}`).join(', '));
+
+  const many = normalizeLayers(Array.from({ length: MAX_LAYERS + 6 }, (_, i) => ({
+    kind: 'sticker', id: `s${i}`, glyph: '⭐',
+  })));
+  ok('layer cap keeps the newest 64',
+    many.length === MAX_LAYERS && many[0].id === 's6' &&
+    many[many.length - 1].id === `s${MAX_LAYERS + 5}`,
+    `${many.length} layers, first=${many[0].id}`);
+
+  const original = normalizeLayers([
+    { kind: 'text', id: 't1', text: 'hello' },
+    { kind: 'sticker', id: 's1', glyph: '🔥' },
+  ]);
+  const cloned = cloneLayers(original);
+  cloned[0].text = 'changed';
+  cloned[1].glyph = '💧';
+  ok('cloneLayers copies both kinds deeply',
+    original[0].text === 'hello' && original[1].glyph === '🔥' &&
+    cloned[0].kind === 'text' && cloned[1].kind === 'sticker');
+
+  const st = defaultState();
+  st.layers = [
+    { kind: 'text', id: 't9', text: 'Chào', x: 0.2, y: 0.3, size: 0.05, color: '#ff0000', bold: true, italic: false, outline: true, shadow: false, align: 'left', rotation: 12, opacity: 0.8, font: 'serif' },
+    { kind: 'sticker', id: 's9', glyph: family, x: 0.7, y: 0.6, size: 0.4, rotation: -30, opacity: 0.9 },
+  ];
+  const restored = normalizeState(JSON.parse(JSON.stringify(st)));
+  ok('normalizeState round-trips v2 text and sticker',
+    restored.version === 2 && restored.layers.length === 2 &&
+    restored.layers[0].kind === 'text' && restored.layers[0].text === 'Chào' &&
+    restored.layers[1].kind === 'sticker' && restored.layers[1].glyph === family &&
+    Math.abs(restored.layers[1].rotation + 30) < 1e-6,
+    `version=${restored.version} layers=${restored.layers.length}`);
+} catch (error) {
+  fail += 1;
+  out(`STATE ERROR: ${error && error.stack ? error.stack : error}`);
+}
+
+/* --------------------------------------------------------------- UI tests */
+try {
+  let savedBlob = null;
+  const editor = createEditor({
+    container: '#host',
+    image: sourceCanvas(),
+    locale: 'en',
+    startTab: 'text',
+    maxPreview: 512,
+    maxExport: 512,
+    colorSpace: 'linear',
+    dither: false,
+    onSave: (blob) => { savedBlob = blob; },
+  });
+  await new Promise((resolve) => {
+    if (editor.isReady) resolve();
+    else editor.on('ready', resolve);
+  });
+  await settle(320);
+
+  editor.showTab('text');
+  await settle(140);
+
+  const pane = document.querySelector('#host .au-pane.is-active');
+  const rail = pane ? pane.querySelector('.au-sticker-grid') : null;
+  const buttons = rail ? Array.from(rail.querySelectorAll('.au-sticker-btn')) : [];
+  const quick = pane ? pane.querySelector('.au-quick-styles') : null;
+  ok('text pane exposes the emoji rail',
+    !!rail && buttons.length >= 20 && buttons.every((b) => b.dataset.glyph.length > 0),
+    `${buttons.length} stickers`);
+
+  buttons[0].click();
+  await settle(60);
+  let state = editor.getState();
+  let stickers = state.layers.filter((l) => l.kind === 'sticker');
+  let nodes = Array.from(document.querySelectorAll('#host .au-stickernode'));
+  ok('tapping an emoji adds one sticker layer and one node',
+    stickers.length === 1 && nodes.length === 1,
+    `layers=${state.layers.length} nodes=${nodes.length}`);
+  ok('the DOM node shows the tapped glyph',
+    nodes[0] && nodes[0].textContent === buttons[0].dataset.glyph,
+    nodes[0] ? nodes[0].textContent : 'missing');
+  ok('a selected sticker hides the text-only controls',
+    pane.classList.contains('is-sticker') && getComputedStyle(quick).display === 'none',
+    `pane=${pane.className}`);
+
+  // Tapping another emoji replaces the selected sticker instead of stacking.
+  buttons[5].click();
+  await settle(60);
+  state = editor.getState();
+  stickers = state.layers.filter((l) => l.kind === 'sticker');
+  nodes = Array.from(document.querySelectorAll('#host .au-stickernode'));
+  ok('a second glyph replaces the selected sticker',
+    stickers.length === 1 && nodes.length === 1 &&
+    stickers[0].glyph === buttons[5].dataset.glyph,
+    stickers[0] ? stickers[0].glyph : 'missing');
+
+  // Drag: one pointer moves the layer in image fractions.
+  let node = document.querySelector('#host .au-stickernode');
+  let box = node.getBoundingClientRect();
+  const beforeDrag = editor.getState().layers.find((l) => l.kind === 'sticker');
+  const cx = box.left + box.width / 2;
+  const cy = box.top + box.height / 2;
+  pointer(node, 'pointerdown', cx, cy, 11);
+  pointer(node, 'pointermove', cx + 60, cy, 11);
+  pointer(node, 'pointerup', cx + 60, cy, 11);
+  await settle(80);
+  let afterDrag = editor.getState().layers.find((l) => l.kind === 'sticker');
+  ok('drag moves the sticker right',
+    afterDrag.x > beforeDrag.x + 0.03 &&
+    Math.abs(afterDrag.y - beforeDrag.y) < 0.02,
+    `x ${beforeDrag.x.toFixed(3)} → ${afterDrag.x.toFixed(3)}`);
+
+  // Drag far beyond the frame clamps at the right edge.
+  node = document.querySelector('#host .au-stickernode');
+  box = node.getBoundingClientRect();
+  pointer(node, 'pointerdown', box.left + box.width / 2, box.top + box.height / 2, 12);
+  pointer(node, 'pointermove', box.left + box.width / 2 + 2000, box.top + box.height / 2, 12);
+  pointer(node, 'pointerup', box.left + box.width / 2 + 2000, box.top + box.height / 2, 12);
+  await settle(80);
+  afterDrag = editor.getState().layers.find((l) => l.kind === 'sticker');
+  ok('a long drag clamps to the frame edge', afterDrag.x === 1,
+    `x=${afterDrag.x}`);
+
+  // Pinch + twist: two pointers scale the sticker and rotate it.
+  node = document.querySelector('#host .au-stickernode');
+  box = node.getBoundingClientRect();
+  const mx = box.left + box.width / 2;
+  const my = box.top + box.height / 2;
+  const beforePinch = editor.getState().layers.find((l) => l.kind === 'sticker');
+  pointer(node, 'pointerdown', mx - 30, my, 21);
+  pointer(node, 'pointerdown', mx + 30, my, 22);
+  pointer(node, 'pointermove', mx - 80, my + 30, 21);
+  pointer(node, 'pointermove', mx + 80, my - 30, 22);
+  pointer(node, 'pointerup', mx - 80, my + 30, 21);
+  pointer(node, 'pointerup', mx + 80, my - 30, 22);
+  await settle(420);
+  const afterPinch = editor.getState().layers.find((l) => l.kind === 'sticker');
+  ok('pinch scales a sticker past the text limit',
+    afterPinch.size > beforePinch.size + 0.1,
+    `size ${beforePinch.size.toFixed(3)} → ${afterPinch.size.toFixed(3)}`);
+  ok('pinch twist rotates the sticker',
+    Math.abs(afterPinch.rotation - beforePinch.rotation) > 10,
+    `rotation ${beforePinch.rotation} → ${afterPinch.rotation}`);
+
+  // A sticker and a text layer coexist and keep their own controls.
+  const base = editor.getState();
+  base.layers = [
+    { kind: 'text', id: 't1', text: 'Xin chào', x: 0.3, y: 0.3, size: 0.08, color: '#ffffff', bold: false, italic: false, outline: false, shadow: true, align: 'center', rotation: 0, opacity: 1, font: 'sys' },
+    { kind: 'sticker', id: 's1', glyph: '🔥', x: 0.7, y: 0.7, size: 0.3, rotation: 15, opacity: 1 },
+  ];
+  editor.setState(base);
+  await settle(180);
+  const textNodes = Array.from(document.querySelectorAll('#host .au-textnode:not(.au-stickernode)'));
+  const stickerNodes = Array.from(document.querySelectorAll('#host .au-stickernode'));
+  ok('setState renders both layer kinds in order',
+    editor.getState().layers.length === 2 &&
+    textNodes.length === 1 && stickerNodes.length === 1 &&
+    textNodes[0].textContent.includes('Xin chào'),
+    `text=${textNodes.length} sticker=${stickerNodes.length}`);
+
+  // Select the sticker: text-only controls hide, the text is untouched.
+  pointer(stickerNodes[0], 'pointerdown', stickerNodes[0].getBoundingClientRect().left + 5, stickerNodes[0].getBoundingClientRect().top + 5, 31);
+  pointer(stickerNodes[0], 'pointerup', stickerNodes[0].getBoundingClientRect().left + 5, stickerNodes[0].getBoundingClientRect().top + 5, 31);
+  await settle(60);
+  ok('selecting a sticker keeps the text intact',
+    pane.classList.contains('is-sticker') &&
+    editor.getState().layers[0].text === 'Xin chào');
+
+  // Select the text again: the text input edits it and the rail stays.
+  pointer(textNodes[0], 'pointerdown', textNodes[0].getBoundingClientRect().left + 5, textNodes[0].getBoundingClientRect().top + 5, 32);
+  pointer(textNodes[0], 'pointerup', textNodes[0].getBoundingClientRect().left + 5, textNodes[0].getBoundingClientRect().top + 5, 32);
+  await settle(60);
+  ok('selecting text restores the text controls',
+    !pane.classList.contains('is-sticker') && getComputedStyle(quick).display !== 'none');
+  const input = pane.querySelector('.au-text-input');
+  input.value = 'Đã sửa';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await settle(60);
+  ok('the text input edits only the text layer',
+    editor.getState().layers[0].text === 'Đã sửa' &&
+    editor.getState().layers[1].kind === 'sticker');
+
+  // Export: both layers are composited onto the full-resolution export.
+  const exportState = editor.getState();
+  exportState.layers = [
+    { kind: 'text', id: 't2', text: 'MM', x: 0.25, y: 0.25, size: 0.12, color: '#ffffff', bold: true, italic: false, outline: false, shadow: false, align: 'center', rotation: 0, opacity: 1, font: 'sys' },
+    { kind: 'sticker', id: 's2', glyph: '❤️', x: 0.75, y: 0.75, size: 0.5, rotation: 20, opacity: 1 },
+  ];
+  editor.setState(exportState);
+  await settle(180);
+  editor.exportType = 'image/png';
+  await editor.saveImage('overwrite');
+  await settle(120);
+  ok('save produced a blob with both layers', !!savedBlob,
+    savedBlob ? `${savedBlob.type} ${savedBlob.size}B` : 'missing');
+  if (savedBlob) {
+    const img = await readBlob(savedBlob);
+    const textChanged = changedInBox(img, img.width * 0.25, img.height * 0.25, 45);
+    const stickerChanged = changedInBox(img, img.width * 0.75, img.height * 0.75, 90);
+    const corner = pixelAt(img, 8, 8);
+    ok('export keeps the PNG type and a usable size',
+      img.width >= 256 && img.height >= 256 && savedBlob.type === 'image/png',
+      `${img.width}x${img.height} ${savedBlob.type}`);
+    ok('export composites the text layer', textChanged > 30, `${textChanged} px`);
+    ok('export composites the sticker layer', stickerChanged > 800, `${stickerChanged} px`);
+    ok('export leaves untouched corners black',
+      corner[0] < 8 && corner[1] < 8 && corner[2] < 8, corner.join(','));
+  }
+
+  // Delete the selected layer through the pane button.
+  const beforeDelete = editor.getState().layers.length;
+  const del = pane.querySelector('.au-chip--danger');
+  del.click();
+  await settle(80);
+  ok('delete removes the selected layer',
+    editor.getState().layers.length === beforeDelete - 1,
+    `${beforeDelete} → ${editor.getState().layers.length}`);
+
+  // The core layer API drives the same overlay as the pane and the gestures.
+  editor.setLayers([{ kind: 'sticker', id: 'sx', glyph: '🌞', x: 0.4, y: 0.4, size: 0.2 }]);
+  await settle(100);
+  const apiLayers = editor.getLayers();
+  apiLayers[0].glyph = 'x';
+  ok('setLayers drives the overlay and getLayers returns a copy',
+    editor.getLayers().length === 1 &&
+    editor.getLayers()[0].glyph === '🌞' &&
+    document.querySelectorAll('#host .au-stickernode').length === 1,
+    `layers=${editor.getLayers().length}`);
+} catch (error) {
+  fail += 1;
+  out(`UI ERROR: ${error && error.stack ? error.stack : error}`);
+}
+
+out(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
+window.__aurumStickerResult = { pass, fail };
+</script>
+</body>
+</html>

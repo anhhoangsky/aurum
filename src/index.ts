@@ -27,6 +27,7 @@ export {
   ADJUST_RANGES,
   HSL_BANDS,
   MAX_LAYERS,
+  MAX_STICKER_CODE_POINTS,
   cloneLayers,
   cloneState,
   defaultAdjust,
@@ -40,6 +41,7 @@ export {
   normalizeLayers,
   normalizeRetouch,
   normalizeState,
+  sanitizeStickerGlyph,
 } from './core/state';
 export {
   MAX_LIQUIFY_DABS,

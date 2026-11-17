@@ -13,7 +13,7 @@ import { ADJUST_RANGES, clamp, defaultEnhance } from '../core/state';
 import { isAbortError } from '../core/async';
 import { PRESETS, presetThumbnail } from '../core/color';
 import type { PresetCategory } from '../core/color';
-import type { EditorState, LayerState, SetStateOptions, TextLayerState } from '../core/types';
+import type { EditorState, LayerState, SetStateOptions, StickerLayerState, TextLayerState } from '../core/types';
 import { maxFrame } from '../core/math';
 import { ensureStyles } from './styles';
 import { icon, type IconName } from './icons';
@@ -225,6 +225,8 @@ const STRINGS = {
     tapTextHint: 'Chạm vào chữ trên ảnh để kéo • Kéo 2 tay không có — dùng thanh trượt',
     deleteText: 'Xoá chữ',
     duplicateText: 'Nhân đôi',
+    stickerTitle: 'Nhãn dán',
+    stickerHint: 'Chạm để thêm — chạm nhãn khác để thay',
     bgTitle: 'AI tách nền',
     bgSub: 'Chạy offline trên máy. Model tải 1 lần (kiểm tra SHA-256), inference không dùng mạng.',
     bgRemove: 'Xoá phông (trong suốt)',
@@ -479,6 +481,8 @@ const STRINGS = {
     tapTextHint: 'Drag the text on the photo • Use sliders to size/rotate',
     deleteText: 'Delete text',
     duplicateText: 'Duplicate',
+    stickerTitle: 'Stickers',
+    stickerHint: 'Tap to add — tap another to replace',
     bgTitle: 'AI background',
     bgSub: 'Runs offline on-device. Model downloads once (SHA-256 checked); inference never uses the network.',
     bgRemove: 'Remove background (transparent)',
@@ -855,6 +859,23 @@ let uid = 0;
 
 // ------------------------------------------------------------------ text layers
 export interface AurumTextLayer extends TextLayerState {}
+export interface AurumStickerLayer extends StickerLayerState {}
+export type AurumLayer = AurumTextLayer | AurumStickerLayer;
+
+/**
+ * Emoji-first sticker rail. A glyph is one emoji family from the system colour
+ * font, so the web overlay and the exported canvas draw the same picture
+ * without shipping an image pack.
+ */
+const STICKER_GLYPHS = [
+  '😀', '😂', '🥰', '😎', '🤩', '😭', '😡', '🥳',
+  '👍', '👏', '🙏', '💪', '❤️', '🔥', '✨', '⭐',
+  '🌸', '🌈', '🎉', '💯', '🍀', '🐱', '🐶', '🎀',
+  '👑', '💋', '🍕', '☕️',
+];
+
+/** System colour-emoji fonts, in the order each platform resolves. */
+const EMOJI_STACK = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
 
 const TEXT_FONTS: { id: string; label: string; stack: string }[] = [
   { id: 'sys', label: 'San', stack: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif" },
@@ -885,6 +906,27 @@ function defaultTextLayer(): AurumTextLayer {
     opacity: 1,
     font: 'sys',
   };
+}
+
+function defaultStickerLayer(glyph: string): AurumStickerLayer {
+  const id = `s${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
+  return {
+    kind: 'sticker',
+    id,
+    glyph,
+    x: 0.5,
+    y: 0.5,
+    size: 0.24,
+    rotation: 0,
+    opacity: 1,
+  };
+}
+
+/** Scale bounds shared by the handles, the pinch gesture and the settle spring. */
+function layerSizeRange(layer: AurumLayer): { min: number; max: number } {
+  return layer.kind === 'sticker'
+    ? { min: 0.04, max: 1 }
+    : { min: 0.02, max: 0.24 };
 }
 
 function applyTextStyle(layer: AurumTextLayer, style: string): void {
@@ -1146,8 +1188,10 @@ export class AurumEditor extends AurumCore {
   private maskHintEl: HTMLElement | null = null;
   private maskToolLabelEl: HTMLElement | null = null;
   private textLayer!: HTMLElement;
-  private texts: AurumTextLayer[] = [];
-  private selectedTextId: string | null = null;
+  private textPane!: HTMLElement;
+  private stickerRail!: HTMLElement;
+  private layers: AurumLayer[] = [];
+  private selectedLayerId: string | null = null;
   private textPlacing = false;
   private textPlaceBtn!: HTMLButtonElement;
   private textShowFrame = (() => { try { return localStorage.getItem('aurum:text-frame') !== '0'; } catch { return true; } })();
@@ -2382,10 +2426,12 @@ export class AurumEditor extends AurumCore {
 
   // ---------------------------------------------------------------- text pane
   private buildTextPane(pane: HTMLElement): void {
+    this.textPane = pane;
+    pane.classList.add('au-text-pane');
     // Compact: quick-row is the entry — plus icon toggles place mode
     // Keep a hidden input for compatibility (fully controlled via overlay editor)
     const input = document.createElement('textarea');
-    input.className = 'au-text-input';
+    input.className = 'au-text-input au-text-only';
     input.style.display = 'none';
     input.rows = 1;
     input.maxLength = 120;
@@ -2393,17 +2439,17 @@ export class AurumEditor extends AurumCore {
     input.setAttribute('aria-label', this.s.textInput);
     input.placeholder = this.s.textInput;
     input.addEventListener('input', () => {
-      const layer = this.selectedLayer();
+      const layer = this.selectedText();
       if (!layer) return;
       layer.text = input.value;
       this.positionTexts();
-      this.syncTextLayerEl(layer);
+      this.syncLayerEl(layer);
     });
     this.textInput = input;
     pane.appendChild(input);
 
     // Quick styles — Meitu style single-tap presets (Apple: Familiarity + Craft)
-    const quick = el('div', 'au-quick-styles');
+    const quick = el('div', 'au-quick-styles au-text-only');
     const quickRow = el('div', 'au-quick-row');
     // Place-mode toggle: tap to enable; next tap on photo creates a text there.
     const placeBtn = el('button', 'au-quick-chip au-quick-chip--icon');
@@ -2433,12 +2479,12 @@ export class AurumEditor extends AurumCore {
       b.dataset.style = def.id;
       b.setAttribute('aria-pressed', 'false');
       b.addEventListener('click', () => {
-        const layer = this.selectedLayer();
+        const layer = this.selectedText();
         if (!layer) return;
         applyTextStyle(layer, def.id);
         for (const child of Array.from(quickRow.children)) child.setAttribute('aria-pressed', String(child === b));
         this.syncTextControls(layer);
-        this.syncTextLayerEl(layer);
+        this.syncLayerEl(layer);
         this.positionTexts();
       });
       quickRow.appendChild(b);
@@ -2446,8 +2492,33 @@ export class AurumEditor extends AurumCore {
     quick.appendChild(quickRow);
     pane.appendChild(quick);
 
+    // Emoji rail — always visible so a sticker can be added from either mode.
+    // Tapping a glyph with a sticker selected swaps its glyph in place.
+    const stickers = el('div', 'au-sticker-rail');
+    const stickerHead = el('div', 'au-sticker-head');
+    const stickerTitle = el('span', 'au-sticker-title');
+    stickerTitle.textContent = this.s.stickerTitle;
+    const stickerHint = el('span', 'au-sticker-hint');
+    stickerHint.textContent = this.s.stickerHint;
+    stickerHead.append(stickerTitle, stickerHint);
+    const stickerGrid = el('div', 'au-sticker-grid');
+    stickerGrid.setAttribute('role', 'group');
+    stickerGrid.setAttribute('aria-label', this.s.stickerTitle);
+    for (const glyph of STICKER_GLYPHS) {
+      const b = el('button', 'au-sticker-btn');
+      b.type = 'button';
+      b.textContent = glyph;
+      b.dataset.glyph = glyph;
+      b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', () => this.applyStickerGlyph(glyph));
+      stickerGrid.appendChild(b);
+    }
+    stickers.append(stickerHead, stickerGrid);
+    pane.appendChild(stickers);
+    this.stickerRail = stickerGrid;
+
     // Font + color row
-    const meta = el('div', 'au-text-meta');
+    const meta = el('div', 'au-text-meta au-text-only');
     const fontSeg = el('div', 'au-seg au-text-fonts');
     fontSeg.setAttribute('role', 'group');
     fontSeg.setAttribute('aria-label', this.s.textStyleTitle);
@@ -2459,11 +2530,11 @@ export class AurumEditor extends AurumCore {
       b.dataset.font = font.id;
       b.setAttribute('aria-pressed', String(font.id === 'sys'));
       b.addEventListener('click', () => {
-        const layer = this.selectedLayer();
+        const layer = this.selectedText();
         if (!layer) return;
         layer.font = font.id;
         for (const child of Array.from(fontSeg.children)) child.setAttribute('aria-pressed', String(child === b));
-        this.syncTextLayerEl(layer);
+        this.syncLayerEl(layer);
       });
       fontSeg.appendChild(b);
     }
@@ -2475,11 +2546,11 @@ export class AurumEditor extends AurumCore {
     colorInput.value = '#ffffff';
     colorInput.setAttribute('aria-label', this.s.textColor);
     colorInput.addEventListener('input', () => {
-      const layer = this.selectedLayer();
+      const layer = this.selectedText();
       if (!layer) return;
       layer.color = colorInput.value;
       colorDot.style.background = colorInput.value;
-      this.syncTextLayerEl(layer);
+      this.syncLayerEl(layer);
     });
     const colorLabel = el('span');
     colorLabel.textContent = this.s.textColor;
@@ -2488,8 +2559,9 @@ export class AurumEditor extends AurumCore {
     pane.appendChild(meta);
 
     const toggles = el('div', 'au-text-toggles');
-    const mkToggle = (label: string, get: () => boolean, set: (v: boolean) => void) => {
+    const mkToggle = (label: string, get: () => boolean, set: (v: boolean) => void, textOnly = true) => {
       const b = el('button', 'au-chip');
+      if (textOnly) b.classList.add('au-text-only');
       b.type = 'button';
       b.textContent = label;
       b.setAttribute('aria-pressed', String(get()));
@@ -2497,34 +2569,34 @@ export class AurumEditor extends AurumCore {
         set(!get());
         b.setAttribute('aria-pressed', String(get()));
         const layer = this.selectedLayer();
-        if (layer) this.syncTextLayerEl(layer);
+        if (layer) this.syncLayerEl(layer);
       });
       toggles.appendChild(b);
       return b;
     };
-    mkToggle(this.s.bold, () => this.selectedLayer()?.bold ?? false, (v) => { const l = this.selectedLayer(); if (l) l.bold = v; });
-    mkToggle(this.s.italic, () => this.selectedLayer()?.italic ?? false, (v) => { const l = this.selectedLayer(); if (l) l.italic = v; });
-    mkToggle(this.s.outline, () => this.selectedLayer()?.outline ?? false, (v) => { const l = this.selectedLayer(); if (l) l.outline = v; });
-    mkToggle(this.s.shadow, () => this.selectedLayer()?.shadow ?? true, (v) => { const l = this.selectedLayer(); if (l) l.shadow = v; });
+    mkToggle(this.s.bold, () => this.selectedText()?.bold ?? false, (v) => { const l = this.selectedText(); if (l) l.bold = v; });
+    mkToggle(this.s.italic, () => this.selectedText()?.italic ?? false, (v) => { const l = this.selectedText(); if (l) l.italic = v; });
+    mkToggle(this.s.outline, () => this.selectedText()?.outline ?? false, (v) => { const l = this.selectedText(); if (l) l.outline = v; });
+    mkToggle(this.s.shadow, () => this.selectedText()?.shadow ?? true, (v) => { const l = this.selectedText(); if (l) l.shadow = v; });
     mkToggle(this.s.textShowFrame, () => this.textShowFrame, (v) => {
       this.textShowFrame = v;
       try { localStorage.setItem('aurum:text-frame', v ? '1' : '0'); } catch {}
       const layer = this.selectedLayer();
-      if (layer) this.syncTextLayerEl(layer);
+      if (layer) this.syncLayerEl(layer);
       // refresh all nodes
       for (const n of Array.from(this.textLayer.querySelectorAll<HTMLElement>('.au-textnode'))) {
-        const l = this.texts.find((t) => t.id === n.dataset.textId);
-        if (l) this.syncTextLayerStyle(n, l);
+        const l = this.layers.find((t) => t.id === n.dataset.textId);
+        if (l) this.syncLayerStyle(n, l);
       }
-    });
+    }, false);
     const dup = el('button', 'au-chip');
     dup.type = 'button';
     dup.innerHTML = `${icon('duplicate')}<span>${this.s.duplicateText}</span>`;
-    dup.addEventListener('click', () => this.duplicateSelectedText());
+    dup.addEventListener('click', () => this.duplicateSelectedLayer());
     const del = el('button', 'au-chip au-chip--danger');
     del.type = 'button';
     del.innerHTML = `${icon('trash')}<span>${this.s.deleteText}</span>`;
-    del.addEventListener('click', () => this.deleteSelectedText());
+    del.addEventListener('click', () => this.deleteSelectedLayer());
     toggles.append(dup, del);
     pane.appendChild(toggles);
 
@@ -2536,7 +2608,7 @@ export class AurumEditor extends AurumCore {
       label: this.s.textOpacity,
       min: 10, max: 100, step: 1, tickStep: 2, defaultValue: 100, ruler: true,
       format: (v) => `${v}%`,
-      onInput: (v) => { const l = this.selectedLayer(); if (l) { l.opacity = v / 100; this.syncTextLayerEl(l); } },
+      onInput: (v) => { const l = this.selectedLayer(); if (l) { l.opacity = v / 100; this.syncLayerEl(l); } },
     });
     // Keep stubs for syncTextControls compatibility (hidden)
     this.textSizeTicks = this.makeTicks({
@@ -4334,58 +4406,109 @@ export class AurumEditor extends AurumCore {
    */
   override getState(): EditorState {
     const state = super.getState();
-    state.layers = this.texts.map((layer) => ({ ...layer }));
+    state.layers = this.layers.map((layer) => ({ ...layer }));
     return state;
   }
 
   override setState(input: unknown, options: SetStateOptions = {}): void {
     super.setState(input, options);
-    this.applyTextLayers(super.getState().layers);
+    this.applyLayers(super.getState().layers);
   }
 
-  private applyTextLayers(layers: LayerState[]): void {
-    this.texts = layers
-      .filter((layer): layer is TextLayerState => layer.kind === 'text')
-      .map((layer) => ({ ...layer }));
-    this.selectedTextId = this.texts[0]?.id ?? null;
+  override getLayers(): LayerState[] {
+    return this.layers.map((layer) => ({ ...layer }));
+  }
+
+  override setLayers(input: unknown, options: SetStateOptions = {}): void {
+    super.setLayers(input, options);
+    this.applyLayers(super.getState().layers);
+  }
+
+  private applyLayers(layers: LayerState[]): void {
+    this.layers = layers
+      .map((layer) => ({ ...layer }))
+      .filter((layer): layer is AurumLayer => layer.kind === 'text' || layer.kind === 'sticker');
+    this.selectedLayerId = this.layers[0]?.id ?? null;
     if (!this.textLayer) return;
     this.textLayer.textContent = '';
-    for (const layer of this.texts) {
-      this.textLayer.appendChild(this.createTextNode(layer));
+    for (const layer of this.layers) {
+      this.textLayer.appendChild(this.createLayerNode(layer));
     }
     this.positionTexts();
-    const first = this.texts[0];
+    const first = this.layers[0];
     if (first) this.syncTextControls(first);
+    else {
+      this.syncTextPaneMode(undefined);
+      if (this.textInput) this.textInput.value = '';
+    }
   }
 
-  private selectedLayer(): AurumTextLayer | undefined {
-    return this.texts.find((t) => t.id === this.selectedTextId);
+  private selectedLayer(): AurumLayer | undefined {
+    return this.layers.find((t) => t.id === this.selectedLayerId);
+  }
+
+  private selectedText(): AurumTextLayer | undefined {
+    const layer = this.selectedLayer();
+    return layer?.kind === 'text' ? layer : undefined;
   }
 
   private addTextLayer(): void {
     if (!this.isReady) return;
     const layer = defaultTextLayer();
     // Stagger new texts so repeated taps don't stack exactly.
-    const n = this.texts.length;
+    const n = this.layers.length;
     layer.x = 0.5 + ((n % 3) - 1) * 0.06;
     layer.y = 0.42 + (n % 4) * 0.08;
-    this.texts.push(layer);
-    this.selectedTextId = layer.id;
-    const node = this.createTextNode(layer);
+    this.layers.push(layer);
+    this.selectedLayerId = layer.id;
+    const node = this.createLayerNode(layer);
     this.textLayer.appendChild(node);
     this.syncTextControls(layer);
     this.positionTexts();
     this.openInlineTextEditor(node, layer);
   }
 
-  private createTextNode(layer: AurumTextLayer): HTMLElement {
-    const node = el('div', 'au-textnode');
+  /**
+   * Adds a sticker, or replaces the glyph of a selected sticker so tapping the
+   * rail again edits the current sticker instead of stacking copies.
+   */
+  private applyStickerGlyph(glyph: string): void {
+    if (!this.isReady) return;
+    const selected = this.selectedLayer();
+    if (selected?.kind === 'sticker') {
+      selected.glyph = glyph;
+      const node = this.textLayer.querySelector<HTMLElement>(`[data-text-id="${selected.id}"]`);
+      if (node) this.syncLayerEl(selected);
+      this.syncTextControls(selected);
+      this.positionTexts();
+      return;
+    }
+    const layer = defaultStickerLayer(glyph);
+    const n = this.layers.length;
+    layer.x = 0.5 + ((n % 3) - 1) * 0.07;
+    layer.y = 0.5 + ((n % 4) - 1.5) * 0.07;
+    this.layers.push(layer);
+    this.selectedLayerId = layer.id;
+    this.textLayer.appendChild(this.createLayerNode(layer));
+    this.syncTextControls(layer);
+    this.positionTexts();
+  }
+
+  private createLayerNode(layer: AurumLayer): HTMLElement {
+    const node = el('div', layer.kind === 'sticker' ? 'au-textnode au-stickernode' : 'au-textnode');
     node.dataset.textId = layer.id;
     node.setAttribute('aria-hidden', 'true');
-    const textSpan = document.createElement('span');
-    textSpan.className = 'au-text-span';
-    textSpan.textContent = layer.text;
-    node.appendChild(textSpan);
+    if (layer.kind === 'text') {
+      const textSpan = document.createElement('span');
+      textSpan.className = 'au-text-span';
+      textSpan.textContent = layer.text;
+      node.appendChild(textSpan);
+    } else {
+      const glyph = document.createElement('span');
+      glyph.className = 'au-sticker-glyph';
+      glyph.textContent = layer.glyph;
+      node.appendChild(glyph);
+    }
     // Selection handles (CSS pseudo visual, no layout change on edit)
     const hud = document.createElement('span');
     hud.className = 'au-text-hud';
@@ -4407,7 +4530,7 @@ export class AurumEditor extends AurumCore {
       handle.addEventListener('pointerdown', (ev) => {
         if (ev.target !== handle && !handle.contains(ev.target as Node)) return;
         ev.preventDefault(); ev.stopPropagation();
-        this.selectedTextId = layer.id; this.syncTextControls(layer);
+        this.selectedLayerId = layer.id; this.syncTextControls(layer);
         try { handle.setPointerCapture(ev.pointerId); } catch {}
         const rect0 = this.displayCropRect();
         const c = rect0 ? { x: rect0.x + layer.x * rect0.width, y: rect0.y + layer.y * rect0.height } : null;
@@ -4424,7 +4547,8 @@ export class AurumEditor extends AurumCore {
           const curAngle = Math.atan2(e.clientY - (stageRect.top + c.y), e.clientX - (stageRect.left + c.x));
           if (kind === 'scale') {
             const scale = curDist / startDist;
-            layer.size = clamp(startSize * scale, 0.02, 0.24);
+            const bounds = layerSizeRange(layer);
+            layer.size = clamp(startSize * scale, bounds.min, bounds.max);
             this.positionTexts();
           } else {
             const dDeg = ((curAngle - startAngle) * 180) / Math.PI;
@@ -4465,16 +4589,16 @@ export class AurumEditor extends AurumCore {
       event.preventDefault();
       event.stopPropagation();
       const now = performance.now();
-      if (now - lastTap < 320) {
+      if (now - lastTap < 320 && layer.kind === 'text') {
         // Double-tap → edit (Apple §10: only pay disambiguation where double-tap exists)
-        this.selectedTextId = layer.id;
+        this.selectedLayerId = layer.id;
         this.syncTextControls(layer);
         this.openInlineTextEditor(node, layer);
         lastTap = 0;
         return;
       }
       lastTap = now;
-      this.selectedTextId = layer.id;
+      this.selectedLayerId = layer.id;
       this.syncTextControls(layer);
       try { node.setPointerCapture(event.pointerId); } catch { /* best-effort */ }
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -4534,11 +4658,12 @@ export class AurumEditor extends AurumCore {
         const scale = dist / gesture.startDist;
         // Momentum projection for scale (Apple §6, decel 0.998)
         const rawSize = gesture.startSize * scale;
-        // Clamp size 2..24% with rubberband beyond
+        // Rubber-band beyond the kind's bounds, then a hard safety clamp.
+        const bounds = layerSizeRange(layer);
         layer.size = rawSize;
-        if (layer.size < 0.02) layer.size = 0.02 + (layer.size - 0.02) * 0.5;
-        if (layer.size > 0.24) layer.size = 0.24 + (layer.size - 0.24) * 0.5;
-        layer.size = clamp(layer.size, 0.015, 0.30);
+        if (layer.size < bounds.min) layer.size = bounds.min + (layer.size - bounds.min) * 0.5;
+        if (layer.size > bounds.max) layer.size = bounds.max + (layer.size - bounds.max) * 0.5;
+        layer.size = clamp(layer.size, bounds.min * 0.75, bounds.max * 1.25);
         const dDeg = ((angle - gesture.startAngle) * 180) / Math.PI;
         layer.rotation = Math.round(((gesture.startRot + dDeg + 540) % 360) - 180);
         // pan with mid-point movement
@@ -4555,7 +4680,8 @@ export class AurumEditor extends AurumCore {
       if (pointers.size === 0 && gesture) {
         // Settle with spring: critically damped response 0.3s, no overshoot (Apple §4)
         const startSize = layer.size;
-        const target = clamp(startSize, 0.02, 0.24);
+        const bounds = layerSizeRange(layer);
+        const target = clamp(startSize, bounds.min, bounds.max);
         if (Math.abs(startSize - target) > 0.001) {
           let v = 0;
           let x = startSize;
@@ -4592,26 +4718,26 @@ export class AurumEditor extends AurumCore {
     node.addEventListener('pointercancel', endPointer);
     node.addEventListener('dblclick', (e) => {
       e.preventDefault();
-      this.selectedTextId = layer.id;
+      this.selectedLayerId = layer.id;
       this.syncTextControls(layer);
-      this.openInlineTextEditor(node, layer);
+      if (layer.kind === 'text') this.openInlineTextEditor(node, layer);
     });
-    this.syncTextLayerStyle(node, layer);
+    this.syncLayerStyle(node, layer);
     return node;
   }
 
-  private syncTextLayerEl(layer: AurumTextLayer): void {
+  private syncLayerEl(layer: AurumLayer): void {
     const node = this.textLayer?.querySelector<HTMLElement>(`[data-text-id="${layer.id}"]`);
     if (!node) return;
-    const span = node.querySelector('.au-text-span');
-    if (span) span.textContent = layer.text;
-    else node.textContent = layer.text;
-    // Re-append handles that textContent wipes
-    if (!node.querySelector('.au-text-handle--scale')) {
-      // Node was nuked — rebuild handles quickly
-      // (Handled lazily by positionTexts; handles re-created on next create)
+    if (layer.kind === 'text') {
+      const span = node.querySelector('.au-text-span');
+      if (span) span.textContent = layer.text;
+      else node.textContent = layer.text;
+    } else {
+      const glyph = node.querySelector('.au-sticker-glyph');
+      if (glyph) glyph.textContent = layer.glyph;
     }
-    this.syncTextLayerStyle(node, layer);
+    this.syncLayerStyle(node, layer);
     this.positionTexts();
   }
 
@@ -4640,7 +4766,7 @@ export class AurumEditor extends AurumCore {
       const span = node.querySelector('.au-text-span');
       if (span) span.textContent = layer.text;
       ta.remove();
-      this.syncTextLayerEl(layer);
+      this.syncLayerEl(layer);
       this.positionTexts();
     };
     ta.addEventListener('keydown', (e) => {
@@ -4659,10 +4785,11 @@ export class AurumEditor extends AurumCore {
     const target = event.target as HTMLElement | null;
     if (target?.closest('.au-textnode, .au-ticks, .au-tabs, .au-deck')) return;
     if (!this.textPlacing) {
-      this.selectedTextId = null;
+      this.selectedLayerId = null;
+      this.syncTextPaneMode(undefined);
       for (const n of Array.from(this.textLayer.querySelectorAll<HTMLElement>('.au-textnode'))) {
-        const l = this.texts.find((t) => t.id === n.dataset.textId);
-        if (l) this.syncTextLayerStyle(n, l);
+        const l = this.layers.find((t) => t.id === n.dataset.textId);
+        if (l) this.syncLayerStyle(n, l);
       }
       return;
     }
@@ -4676,9 +4803,9 @@ export class AurumEditor extends AurumCore {
     const layer = defaultTextLayer();
     layer.x = clamp01(x); layer.y = clamp01(y);
     layer.text = '';
-    this.texts.push(layer);
-    this.selectedTextId = layer.id;
-    const node = this.createTextNode(layer);
+    this.layers.push(layer);
+    this.selectedLayerId = layer.id;
+    const node = this.createLayerNode(layer);
     this.textLayer.appendChild(node);
     this.syncTextControls(layer);
     this.positionTexts();
@@ -4690,25 +4817,31 @@ export class AurumEditor extends AurumCore {
     this.root.classList.remove('au-text-placing');
   };
 
-  private syncTextLayerStyle(node: HTMLElement, layer: AurumTextLayer): void {
-    const font = TEXT_FONTS.find((f) => f.id === layer.font) ?? TEXT_FONTS[0];
+  private syncLayerStyle(node: HTMLElement, layer: AurumLayer): void {
     const rect = this.displayCropRect();
     const fontPx = Math.max(10, (rect ? rect.height : 320) * layer.size);
-    node.style.fontFamily = font.stack;
     node.style.fontSize = `${fontPx}px`;
-    node.style.color = layer.color;
-    node.style.fontWeight = layer.bold ? '700' : '400';
-    node.style.fontStyle = layer.italic ? 'italic' : 'normal';
-    node.style.textAlign = layer.align;
     node.style.opacity = String(layer.opacity);
-    node.classList.toggle('is-selected', layer.id === this.selectedTextId);
-    node.classList.toggle('is-outline', layer.outline);
-    node.classList.toggle('is-shadow', layer.shadow && !layer.outline);
+    node.classList.toggle('is-selected', layer.id === this.selectedLayerId);
     node.classList.toggle('show-frame', this.textShowFrame);
+    if (layer.kind === 'text') {
+      const font = TEXT_FONTS.find((f) => f.id === layer.font) ?? TEXT_FONTS[0];
+      node.style.fontFamily = font.stack;
+      node.style.color = layer.color;
+      node.style.fontWeight = layer.bold ? '700' : '400';
+      node.style.fontStyle = layer.italic ? 'italic' : 'normal';
+      node.style.textAlign = layer.align;
+      node.classList.toggle('is-outline', layer.outline);
+      node.classList.toggle('is-shadow', layer.shadow && !layer.outline);
+    } else {
+      // Emoji must come from a colour font; a text font would flatten it.
+      node.style.fontFamily = EMOJI_STACK;
+      node.classList.remove('is-outline', 'is-shadow');
+    }
   }
 
-  private syncTextControls(layer: AurumTextLayer): void {
-    if (this.textInput) this.textInput.value = layer.text;
+  private syncTextControls(layer: AurumLayer): void {
+    if (layer.kind === 'text' && this.textInput) this.textInput.value = layer.text;
     if (this.textSizeTicks) this.textSizeTicks.set(Math.round(layer.size * 100), false);
     if (this.textOpacityTicks) {
       // Avoid fighting the user's finger: only overwrite when not actively dragging
@@ -4716,9 +4849,25 @@ export class AurumEditor extends AurumCore {
       if (!isDragging) this.textOpacityTicks.set(Math.round(layer.opacity * 100), false);
     }
     if (this.textRotateTicks) this.textRotateTicks.set(Math.round(layer.rotation), false);
+    this.syncTextPaneMode(layer);
     for (const node of Array.from(this.textLayer.querySelectorAll<HTMLElement>('.au-textnode'))) {
-      const l = this.texts.find((t) => t.id === node.dataset.textId);
-      if (l) this.syncTextLayerStyle(node, l);
+      const l = this.layers.find((t) => t.id === node.dataset.textId);
+      if (l) this.syncLayerStyle(node, l);
+    }
+  }
+
+  /**
+   * Text-only controls disappear when a sticker is selected; the shared
+   * opacity slider, duplicate/delete and the emoji rail stay.
+   */
+  private syncTextPaneMode(layer: AurumLayer | undefined): void {
+    this.textPane?.classList.toggle('is-sticker', layer?.kind === 'sticker');
+    if (!this.stickerRail) return;
+    const active = layer?.kind === 'sticker' ? layer.glyph : null;
+    for (const button of Array.from(this.stickerRail.querySelectorAll<HTMLElement>('[data-glyph]'))) {
+      const on = button.dataset.glyph === active;
+      button.classList.toggle('is-active', on);
+      button.setAttribute('aria-pressed', String(on));
     }
   }
 
@@ -4857,7 +5006,7 @@ export class AurumEditor extends AurumCore {
     const rect = this.imageDisplayRect() ?? this.displayCropRect();
     if (!rect) return;
     for (const node of Array.from(this.textLayer.querySelectorAll<HTMLElement>('.au-textnode'))) {
-      const layer = this.texts.find((t) => t.id === node.dataset.textId);
+      const layer = this.layers.find((t) => t.id === node.dataset.textId);
       if (!layer) continue;
       const p = this.screenPointAt(layer.x, layer.y);
       const x = p ? p.x : rect.x + layer.x * rect.width;
@@ -4868,32 +5017,34 @@ export class AurumEditor extends AurumCore {
     }
   }
 
-  private deleteSelectedText(): void {
-    if (!this.selectedTextId) return;
-    this.texts = this.texts.filter((t) => t.id !== this.selectedTextId);
-    this.selectedTextId = this.texts[0]?.id ?? null;
-    this.textLayer?.querySelector(`[data-text-id="${this.selectedTextId}"]`);
+  private deleteSelectedLayer(): void {
+    if (!this.selectedLayerId) return;
+    this.layers = this.layers.filter((t) => t.id !== this.selectedLayerId);
+    this.selectedLayerId = this.layers[0]?.id ?? null;
     // Rebuild all nodes from state (keeps the code path singular).
     this.textLayer.replaceChildren();
-    for (const layer of this.texts) this.textLayer.appendChild(this.createTextNode(layer));
+    for (const layer of this.layers) this.textLayer.appendChild(this.createLayerNode(layer));
     const next = this.selectedLayer();
     if (next) this.syncTextControls(next);
-    else if (this.textInput) this.textInput.value = '';
+    else {
+      if (this.textInput) this.textInput.value = '';
+      this.syncTextPaneMode(undefined);
+    }
     this.positionTexts();
   }
 
-  private duplicateSelectedText(): void {
+  private duplicateSelectedLayer(): void {
     const src = this.selectedLayer();
     if (!src) return;
-    const copy: AurumTextLayer = {
+    const copy = {
       ...src,
-      id: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
+      id: `${src.kind === 'text' ? 't' : 's'}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
       x: clamp01(src.x + 0.05),
       y: clamp01(src.y + 0.05),
-    };
-    this.texts.push(copy);
-    this.selectedTextId = copy.id;
-    this.textLayer.appendChild(this.createTextNode(copy));
+    } as AurumLayer;
+    this.layers.push(copy);
+    this.selectedLayerId = copy.id;
+    this.textLayer.appendChild(this.createLayerNode(copy));
     this.syncTextControls(copy);
     this.positionTexts();
   }
@@ -4997,9 +5148,9 @@ export class AurumEditor extends AurumCore {
     }
   }
 
-  /** Composite text layers onto an exported blob (called from saveImage). */
-  private async compositeTexts(blob: Blob): Promise<Blob> {
-    if (!this.texts.length) return blob;
+  /** Composite text and sticker layers onto an exported blob (called from saveImage). */
+  private async compositeLayers(blob: Blob): Promise<Blob> {
+    if (!this.layers.length) return blob;
     let bitmap: { width: number; height: number } & CanvasImageSource | null = null;
     try {
       bitmap = await createImageBitmap(blob);
@@ -5024,7 +5175,22 @@ export class AurumEditor extends AurumCore {
     ctx.drawImage(bitmap, 0, 0);
     const W = canvas.width;
     const H = canvas.height;
-    for (const layer of this.texts) {
+    for (const layer of this.layers) {
+      if (layer.kind === 'sticker') {
+        // Emoji are drawn by the colour font at the same height fraction the
+        // overlay uses, so the exported sticker lands where the preview shows.
+        const size = Math.max(8, H * layer.size);
+        ctx.save();
+        ctx.translate(layer.x * W, layer.y * H);
+        ctx.rotate(((layer.rotation || 0) * Math.PI) / 180);
+        ctx.globalAlpha = clamp01(layer.opacity);
+        ctx.font = `${size}px ${EMOJI_STACK}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(layer.glyph, 0, 0);
+        ctx.restore();
+        continue;
+      }
       const text = layer.text.trim();
       if (!text) continue;
       const font = TEXT_FONTS.find((f) => f.id === layer.font) ?? TEXT_FONTS[0];
@@ -5114,8 +5280,8 @@ export class AurumEditor extends AurumCore {
       this.root.classList.add('au-ready');
       this.setLiquify(false);
       // New base image: text belongs to the previous pixels.
-      this.texts = [];
-      this.selectedTextId = null;
+      this.layers = [];
+      this.selectedLayerId = null;
       this.textLayer?.replaceChildren();
       if (this.textInput) this.textInput.value = '';
       this.positionTexts();
@@ -6161,7 +6327,7 @@ export class AurumEditor extends AurumCore {
       });
       // Text is auxiliary (display layer): composite onto the full-res export
       // so the saved file embeds the words at export resolution.
-      blob = await this.compositeTexts(blob);
+      blob = await this.compositeLayers(blob);
       const name = this.fileName();
       this.updateProgress({ phase: 'encode', progress: 1, tile: 0, tiles: 0 });
       if (callback) {

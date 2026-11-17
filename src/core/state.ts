@@ -14,6 +14,7 @@ import type {
   LayerState,
   LiquifyDab,
   RetouchState,
+  StickerLayerState,
   TextLayerState,
   TransformState,
 } from './types';
@@ -212,17 +213,52 @@ const LAYER_ID = /^[a-zA-Z0-9_-]{1,40}$/;
 const LAYER_FONT = /^[a-z0-9-]{1,24}$/i;
 const LAYER_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const MAX_TEXT_LENGTH = 500;
+/**
+ * A sticker is one glyph. Sixteen code points leave room for a ZWJ family with
+ * skin tones while still blocking a hand-edited state from packing a paragraph
+ * into a single overlay node.
+ */
+export const MAX_STICKER_CODE_POINTS = 16;
+const STICKER_CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
+
+/**
+ * Reduce an untrusted string to something an emoji font can draw. Control
+ * characters and lone surrogates are dropped, then at most 16 code points are
+ * kept. ZWJ, variation selectors and skin-tone modifiers are printable code
+ * points, so sequences such as a family or a waving hand survive intact.
+ */
+export function sanitizeStickerGlyph(input: unknown): string {
+  if (typeof input !== 'string') return '';
+  const points = Array.from(input.replace(STICKER_CONTROL, '')).filter(
+    (char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return code < 0xd800 || code > 0xdfff;
+    },
+  );
+  return points.slice(0, MAX_STICKER_CODE_POINTS).join('').trim();
+}
 
 /**
  * Layers are untrusted input in the same way liquify dabs are: clamp every
- * number, whitelist fonts and colours, and drop anything that is not a text
- * layer instead of letting the host build a node from a hand-edited JSON.
+ * number, whitelist fonts and colours, and drop anything that is not a layer
+ * kind this build can render instead of letting the host build a node from a
+ * hand-edited JSON.
  */
-function normalizeLayer(input: unknown, index: number): TextLayerState | null {
+function normalizeLayer(input: unknown, index: number): LayerState | null {
   if (!input || typeof input !== 'object') return null;
-  const raw = input as Partial<TextLayerState> & Record<string, unknown>;
-  // v2.0 only knows text; an unknown `kind` is kept out rather than guessed.
-  if (raw.kind !== undefined && raw.kind !== 'text') return null;
+  const raw = input as Record<string, unknown>;
+  // v2.0 wrote text layers without `kind`, so a missing kind means text. An
+  // unknown kind is kept out rather than guessed.
+  const kind = raw.kind === undefined ? 'text' : raw.kind;
+  if (kind === 'text') return normalizeTextLayer(raw, index);
+  if (kind === 'sticker') return normalizeStickerLayer(raw, index);
+  return null;
+}
+
+function normalizeTextLayer(
+  raw: Record<string, unknown>,
+  index: number,
+): TextLayerState {
   const align = (TEXT_ALIGNS as readonly string[]).includes(raw.align as string)
     ? (raw.align as TextLayerState['align'])
     : 'center';
@@ -251,9 +287,30 @@ function normalizeLayer(input: unknown, index: number): TextLayerState | null {
   };
 }
 
+function normalizeStickerLayer(
+  raw: Record<string, unknown>,
+  index: number,
+): StickerLayerState | null {
+  const glyph = sanitizeStickerGlyph(raw.glyph);
+  // An empty glyph would be an invisible node that eats gestures, so the layer
+  // is dropped instead of clamped to a placeholder.
+  if (!glyph) return null;
+  return {
+    kind: 'sticker',
+    id: typeof raw.id === 'string' && LAYER_ID.test(raw.id) ? raw.id : `s${index}`,
+    glyph,
+    x: clamp(finite(raw.x, 0.5), 0, 1),
+    y: clamp(finite(raw.y, 0.5), 0, 1),
+    // A sticker may cover the whole export height, unlike a text line.
+    size: clamp(finite(raw.size, 0.24), 0.02, 1),
+    rotation: clamp(finite(raw.rotation, 0), -180, 180),
+    opacity: clamp(finite(raw.opacity, 1), 0, 1),
+  };
+}
+
 export function normalizeLayers(input: unknown): LayerState[] {
   if (!Array.isArray(input)) return [];
-  const out: TextLayerState[] = [];
+  const out: LayerState[] = [];
   const seen = new Set<string>();
   const start = Math.max(0, input.length - MAX_LAYERS);
   for (let i = start; i < input.length; i += 1) {

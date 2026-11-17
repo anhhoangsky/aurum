@@ -279,7 +279,7 @@ editor.destroy(); // disposes listeners, bitmaps, GL resources and the root node
 | `getState()` | Deep copy of the current state. |
 | `setState(state, opts?)` | Normalise and apply state. `opts.history: false` skips the history entry; `opts.silent` suppresses `change`/`history` events (rendering still emits `render`). |
 | `exportState()` / `importState(json)` | JSON envelope round-trip (`{ version: 2, state }`); `importState` accepts the v1 envelope too. |
-| `getLayers()` / `setLayers(layers, opts?)` | Composed text layers (state v2). `setLayers` normalises untrusted input and pushes one history entry unless `opts.history` is `false`. |
+| `getLayers()` / `setLayers(layers, opts?)` | Composed text and emoji-sticker layers (state v2). `setLayers` normalises untrusted input and pushes one history entry unless `opts.history` is `false`. |
 | `setAdjust(key, value, coalesceKey?)` | Clamp and apply one adjustment. |
 | `resetAdjust(key)` / `resetAdjustments()` | Reset one or all adjustments. |
 | `setFilter(id)` | Apply a preset by id; unknown ids fall back to `original`. |
@@ -353,6 +353,16 @@ editor.destroy(); // disposes listeners, bitmaps, GL resources and the root node
       "rotation": 0,
       "opacity": 1,
       "font": "sys"
+    },
+    {
+      "kind": "sticker",
+      "id": "sun",
+      "glyph": "🌞",
+      "x": 0.78,
+      "y": 0.2,
+      "size": 0.22,
+      "rotation": -12,
+      "opacity": 1
     }
   ],
   "chain": { "id": "beauty-auto", "strengths": { "smoothSkin": 32 } }
@@ -361,7 +371,7 @@ editor.destroy(); // disposes listeners, bitmaps, GL resources and the root node
 
 `offsetX` / `offsetY` are normalised image-local units (the image quad is −1…1). Keeping them local makes bounds axis-aligned even when the image is rotated. Liquify dabs and layers are also in normalised space, so a saved session reopens at any preview size. State is non-destructive: the source bitmap is never modified.
 
-Version 2 adds `layers` (text now, stickers in the next step) and an optional `chain` that records which one-tap preset produced the look. The importer normalises v1 states into v2 — missing layers become `[]`, unknown or malformed layers are dropped, and each layer field is clamped — so an old saved session keeps every adjustment. `exportState` always writes v2.
+Version 2 adds `layers` (text and emoji stickers) and an optional `chain` that records which one-tap preset produced the look. The importer normalises v1 states into v2 — missing layers become `[]`, unknown or malformed layers are dropped, and each layer field is clamped — so an old saved session keeps every adjustment. `exportState` always writes v2. A sticker carries one emoji glyph (ZWJ sequences and skin tones intact), the same centre/size/rotation/opacity model as text, and is capped at 16 code points so a hand-edited state cannot hide a paragraph in one node.
 
 ## Events
 
@@ -416,7 +426,7 @@ Known limits:
 - Previews are capped at 1080 px on the longest side; full resolution is reserved for export.
 - WebGL textures larger than 8192 px are downscaled for export on GPUs with that limit. The output is still capped by `maxExport`.
 - Cross-origin URLs must be served with CORS headers, otherwise the browser refuses to read the pixels.
-- No stickers, drawing, multi-image collage or cloud sync yet — Aurum is deliberately a focused crop/adjust/portrait/export engine. Text layers are part of state v2.
+- No drawing, multi-image collage or cloud sync yet — Aurum is deliberately a focused crop/adjust/portrait/export engine. Text and emoji-sticker layers are part of state v2.
 
 ---
 

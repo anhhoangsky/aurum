@@ -233,8 +233,30 @@ export interface TextLayerState {
   font: string;
 }
 
-/** Layers composed over the photo. Sticker kind is added by C1. */
-export type LayerState = TextLayerState;
+/**
+ * An emoji sticker composed over the graded photo. It shares the centre,
+ * size, rotation and opacity model of a text layer, so one gesture handler and
+ * one exporter cover both kinds. The glyph stays a string: colour emoji fonts
+ * render it the same way in the web overlay and on iOS.
+ */
+export interface StickerLayerState {
+  kind: 'sticker';
+  id: string;
+  /** One emoji grapheme (ZWJ sequences and skin tones kept). */
+  glyph: string;
+  /** Centre position in exported-image fractions (0..1). */
+  x: number;
+  y: number;
+  /** Sticker height as a fraction of the export height. */
+  size: number;
+  /** Rotation in degrees, -180..180. */
+  rotation: number;
+  /** Opacity 0..1. */
+  opacity: number;
+}
+
+/** Layers composed over the photo: text and emoji stickers. */
+export type LayerState = TextLayerState | StickerLayerState;
 
 /**
  * One-tap chain applied from the shared preset catalogue. The chain is
