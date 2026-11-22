@@ -83,6 +83,17 @@ export type {
   CollageSource,
   CollageState,
 } from './core/collage';
+export {
+  AurumCollage,
+  COLLAGE_CSS,
+  createCollageEditor,
+  ensureCollageStyles,
+} from './ui/collage-ui';
+export type {
+  CollageInput,
+  CollageLocale,
+  CollageUIOptions,
+} from './ui/collage-ui';
 export { analyzeBitmap, autoAdjust } from './core/enhance/analyze';
 export {
   CURVE_PRESETS,

@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aurum collage UI test</title>
+<style>
+  body { margin: 0; padding: 12px; background: #111; color: #eee; font: 13px/1.5 ui-monospace, monospace; }
+  #app { width: 400px; height: 700px; background: #000; }
+  #app2, #app3 { position: absolute; left: -2000px; top: 0; width: 400px; height: 700px; }
+  pre { white-space: pre-wrap; background: #1b1b1b; padding: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<pre id="log">Running...</pre>
+<div id="app"></div>
+<div id="app2"></div>
+<div id="app3"></div>
+<script type="module">
+import {
+  AurumCollage,
+  COLLAGE_CSS,
+  createCollageEditor,
+  ensureCollageStyles,
+} from './dist/aurum.esm.js?v=20261122b';
+
+const log = document.getElementById('log');
+const lines = [];
+let pass = 0;
+let fail = 0;
+
+function out(text) {
+  lines.push(text);
+  log.textContent = lines.join('\n');
+}
+function ok(label, condition, detail = '') {
+  if (condition) {
+    pass += 1;
+    out(`PASS ${label}${detail ? ` - ${detail}` : ''}`);
+  } else {
+    fail += 1;
+    out(`FAIL ${label}${detail ? ` - ${detail}` : ''}`);
+  }
+}
+window.addEventListener('error', (event) => out(`WINDOW ERROR: ${event.message}`));
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  out(`REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function solid(color, width = 100, height = 100) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, width, height);
+  return canvas;
+}
+function sameColor(got, [r, g, b], tol = 3) {
+  return Math.abs(got[0] - r) <= tol
+    && Math.abs(got[1] - g) <= tol
+    && Math.abs(got[2] - b) <= tol;
+}
+function pointer(type, target, x, y, id = 1) {
+  target.dispatchEvent(new PointerEvent(type, {
+    pointerId: id,
+    pointerType: 'touch',
+    isPrimary: id === 1,
+    clientX: x,
+    clientY: y,
+    button: 0,
+    buttons: type === 'pointerup' ? 0 : 1,
+    bubbles: true,
+    cancelable: true,
+  }));
+}
+function wheel(target, x, y, deltaY) {
+  target.dispatchEvent(new WheelEvent('wheel', {
+    deltaY,
+    clientX: x,
+    clientY: y,
+    bubbles: true,
+    cancelable: true,
+  }));
+}
+function setRange(input, value) {
+  input.value = String(value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function center(box, fx, fy) {
+  return [box.left + box.width * fx, box.top + box.height * fy];
+}
+async function readBlob(blob, side) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = side;
+  canvas.height = side;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, side, side);
+  bitmap.close?.();
+  return (x, y) => {
+    const data = ctx.getImageData(x, y, 1, 1).data;
+    return [data[0], data[1], data[2], data[3]];
+  };
+}
+
+// ---------------------------------------------------------------- exports
+ok('createCollageEditor is exported', typeof createCollageEditor === 'function');
+ok('AurumCollage is exported', typeof AurumCollage === 'function');
+ok('COLLAGE_CSS ships text', typeof COLLAGE_CSS === 'string' && COLLAGE_CSS.includes('.au-collage'));
+ensureCollageStyles();
+ok('collage stylesheet is injected once',
+  document.querySelectorAll('style[data-aurum-collage]').length === 1);
+ensureCollageStyles();
+ok('styles injection is idempotent',
+  document.querySelectorAll('style[data-aurum-collage]').length === 1);
+
+// ---------------------------------------------------------------- empty state
+const empty = createCollageEditor('#app2', { exportSize: 256 });
+await empty.ready;
+ok('empty: no sources', empty.sourceCount === 0);
+ok('empty: stage is marked empty',
+  empty.element.querySelector('.au-collage__stage').classList.contains('is-empty'));
+ok('empty: save disabled',
+  empty.element.querySelector('.au-collage__save').disabled === true);
+ok('empty: no selected cell', empty.selectedCell === -1);
+ok('empty: rail hidden',
+  empty.element.querySelector('.au-collage__rail').hidden === true);
+ok('empty: export returns null', (await empty.exportBlob()) === null);
+empty.destroy();
+ok('destroy removes the screen', document.querySelectorAll('.au-collage').length === 0);
+
+// ---------------------------------------------------------------- two cells
+const red = solid('#ff0000');
+const blue = solid('#0000ff');
+let stateChanges = 0;
+const collage = createCollageEditor('#app', {
+  sources: [red, blue],
+  exportSize: 256,
+  locale: 'vi',
+  onStateChange() { stateChanges += 1; },
+});
+await collage.ready;
+const root = collage.element;
+const canvas = root.querySelector('.au-collage__stage canvas');
+const rail = root.querySelector('.au-collage__rail');
+
+ok('two sources decode', collage.sourceCount === 2);
+ok('stage leaves the empty state',
+  !root.querySelector('.au-collage__stage').classList.contains('is-empty'));
+ok('save is enabled',
+  root.querySelector('.au-collage__save').disabled === false);
+ok('rail lists only two-cell layouts', rail.querySelectorAll('.au-collage__layout').length === 2);
+ok('defaults to duo-split and two cells', (() => {
+  const state = collage.getState();
+  return state.layout === 'duo-split'
+    && state.cells.length === 2
+    && state.cells[0].source === 0
+    && state.cells[1].source === 1;
+})());
+ok('active rail button matches the layout',
+  rail.querySelector('.au-collage__layout.is-active')?.dataset.layout === 'duo-split');
+ok('the gesture hint starts visible',
+  !root.querySelector('.au-collage__hint').classList.contains('is-hidden'));
+
+const box = canvas.getBoundingClientRect();
+const [leftX, midY] = center(box, 0.25, 0.5);
+const [rightX] = center(box, 0.75, 0.5);
+
+pointer('pointerdown', canvas, leftX, midY, 11);
+pointer('pointerup', canvas, leftX, midY, 11);
+ok('tapping the left cell selects it', collage.selectedCell === 0);
+ok('the first gesture dismisses the hint',
+  root.querySelector('.au-collage__hint').classList.contains('is-hidden'));
+pointer('pointerdown', canvas, rightX, midY, 12);
+pointer('pointerup', canvas, rightX, midY, 12);
+ok('tapping the right cell selects it', collage.selectedCell === 1);
+
+rail.querySelector('[data-layout="duo-stack"]').click();
+ok('rail switches the layout', collage.getState().layout === 'duo-stack');
+ok('switching keeps two cells', collage.getState().cells.length === 2);
+ok('state callback fired', stateChanges > 0, `${stateChanges} calls`);
+
+setRange(root.querySelectorAll('.au-collage__slider')[0], 3);
+ok('gap slider writes the document',
+  Math.abs(collage.getState().gap - 0.03) < 1e-9,
+  String(collage.getState().gap));
+setRange(root.querySelectorAll('.au-collage__slider')[1], 20);
+ok('radius slider writes the document',
+  Math.abs(collage.getState().radius - 0.2) < 1e-9);
+
+root.querySelector('.au-collage__swatch[data-color="#101014"]').click();
+ok('background swatch writes the document',
+  collage.getState().background === '#101014');
+collage.setState({ ...collage.getState(), background: 'not-a-colour' });
+ok('invalid background falls back to white',
+  collage.getState().background === '#ffffff');
+
+// Back to duo-split for the gestures.
+collage.setState({ layout: 'duo-split', gap: 0, radius: 0, background: '#101014' });
+const box2 = canvas.getBoundingClientRect();
+const [gx, gy] = center(box2, 0.25, 0.5);
+
+wheel(canvas, gx, gy, -220);
+ok('wheel zooms the cell under the cursor',
+  collage.getState().cells[0].zoom > 1,
+  collage.getState().cells[0].zoom.toFixed(2));
+ok('wheel selects that cell', collage.selectedCell === 0);
+
+const before = collage.getState().cells[0].offsetX;
+pointer('pointerdown', canvas, gx, gy, 21);
+pointer('pointermove', canvas, gx + 40, gy, 21);
+pointer('pointerup', canvas, gx + 40, gy, 21);
+const after = collage.getState().cells[0].offsetX;
+ok('dragging pans the cell', after < before, `${before.toFixed(2)} -> ${after.toFixed(2)}`);
+
+await sleep(400);
+for (const id of [31, 32]) {
+  pointer('pointerdown', canvas, gx, gy, id);
+  pointer('pointerup', canvas, gx, gy, id);
+}
+ok('double-tap resets zoom and pan', (() => {
+  const cell = collage.getState().cells[0];
+  return cell.zoom === 1 && cell.offsetX === 0 && cell.offsetY === 0;
+})());
+
+collage.selectCell?.(0);
+canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+ok('arrow keys nudge the pan',
+  Math.abs(collage.getState().cells[0].offsetY - 0.05) < 1e-9,
+  String(collage.getState().cells[0].offsetY));
+
+// Pinch: two pointers moving apart.
+const zoomBeforePinch = collage.getState().cells[1].zoom;
+collage.setState({ ...collage.getState(), layout: 'duo-split' });
+const box3 = canvas.getBoundingClientRect();
+const [px, py] = center(box3, 0.75, 0.5);
+pointer('pointerdown', canvas, px - 20, py, 41);
+pointer('pointerdown', canvas, px + 20, py, 42);
+pointer('pointermove', canvas, px - 50, py, 41);
+pointer('pointermove', canvas, px + 50, py, 42);
+pointer('pointerup', canvas, px - 50, py, 41);
+pointer('pointerup', canvas, px + 50, py, 42);
+ok('pinch zooms the selected cell',
+  collage.getState().cells[1].zoom > zoomBeforePinch,
+  String(collage.getState().cells[1].zoom));
+
+// ---------------------------------------------------------------- export pixels
+collage.setState({
+  layout: 'duo-split',
+  gap: 0,
+  radius: 0,
+  background: '#101014',
+  cells: [
+    { source: 0, zoom: 1, offsetX: 0, offsetY: 0 },
+    { source: 1, zoom: 1, offsetX: 0, offsetY: 0 },
+  ],
+});
+const blob = await collage.exportBlob('image/png');
+ok('export returns a png blob', blob instanceof Blob && blob.type === 'image/png' && blob.size > 0,
+  blob ? `${(blob.size / 1024).toFixed(1)} KB` : 'null');
+const pixel = await readBlob(blob, 256);
+ok('left cell shows the first source', sameColor(pixel(64, 128), [255, 0, 0]), String(pixel(64, 128)));
+ok('right cell shows the second source', sameColor(pixel(192, 128), [0, 0, 255]), String(pixel(192, 128)));
+
+collage.setState({ ...collage.getState(), gap: 0.06 });
+const gapped = await readBlob(await collage.exportBlob('image/png'), 256);
+ok('gap paints the frame with the background',
+  sameColor(gapped(2, 2), [16, 16, 20]) && sameColor(gapped(128, 2), [16, 16, 20]),
+  String(gapped(2, 2)));
+
+collage.setState({ ...collage.getState(), gap: 0, radius: 0.5 });
+const rounded = await readBlob(await collage.exportBlob('image/png'), 256);
+ok('radius clips the corner of a cell', sameColor(rounded(2, 2), [16, 16, 20]), String(rounded(2, 2)));
+
+const jpeg = await collage.exportBlob('image/jpeg', 0.9);
+ok('jpeg export is available', jpeg instanceof Blob && jpeg.type === 'image/jpeg');
+
+collage.destroy();
+ok('destroy clears the main screen', document.querySelectorAll('.au-collage').length === 0);
+
+// ---------------------------------------------------------------- growth and cap
+const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#008888'];
+const nine = colors.map((color) => solid(color));
+const trio = createCollageEditor('#app3', {
+  sources: nine.slice(0, 3),
+  exportSize: 256,
+});
+await trio.ready;
+ok('three sources build a three-cell document',
+  trio.getState().cells.length === 3);
+ok('trio rail offers four layouts',
+  trio.element.querySelectorAll('.au-collage__layout').length === 4);
+trio.element.querySelector('[data-layout="trio-left"]').click();
+ok('trio can switch to trio-left', trio.getState().layout === 'trio-left');
+
+await trio.addSources(nine.slice(3, 9));
+ok('adding sources grows to nine', trio.sourceCount === 9);
+ok('nine sources pick the nine-grid', (() => {
+  const state = trio.getState();
+  return state.layout === 'nine-grid' && state.cells.length === 9;
+})());
+ok('nine sources keep their order', (() => {
+  const sources = trio.getState().cells.map((cell) => cell.source);
+  return sources.join(',') === '0,1,2,3,4,5,6,7,8';
+})());
+
+await trio.addSources([solid('#123456')]);
+ok('the ninth photo is the ceiling', trio.sourceCount === 9);
+ok('add button disables at nine',
+  trio.element.querySelector('.au-collage__iconbtn').disabled === true);
+
+const nineBlob = await trio.exportBlob('image/webp', 0.9);
+ok('nine-cell webp export succeeds',
+  nineBlob instanceof Blob && nineBlob.type === 'image/webp' && nineBlob.size > 0,
+  nineBlob ? `${(nineBlob.size / 1024).toFixed(1)} KB` : 'null');
+
+await trio.setSources([...nine, solid('#ffffff')]);
+ok('setSources caps at nine', trio.sourceCount === 9);
+
+const saved = createCollageEditor('#app3', {
+  sources: [red, blue],
+  exportSize: 128,
+  onSave(blobToSave, savedState) {
+    window.__saved = { size: blobToSave.size, layout: savedState.layout };
+  },
+});
+await saved.ready;
+await saved.save();
+ok('save hands the blob to the host callback',
+  window.__saved && window.__saved.size > 0 && window.__saved.layout !== undefined,
+  window.__saved ? `${window.__saved.size} bytes` : 'none');
+saved.destroy();
+
+trio.destroy();
+
+out('');
+out(`${fail === 0 ? 'ALL PASS' : 'FAILURES'} ${pass}/${pass + fail}`);
+</script>
+</body>
+</html>

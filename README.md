@@ -203,6 +203,15 @@ The fragment pipeline is assembled from GLSL modules at build time; the browser 
 
 Preset thumbnails are generated at 128 px from the loaded preview, so they match the actual image.
 
+### Collage
+`AurumCollage` is a separate square screen that lays 2–9 photos out without touching the editor.
+
+- 19 layouts come from `specs/layouts.json` (a 12-unit grid shared byte-for-byte with the Swift client); the rail only offers layouts whose cell count matches the selected photos.
+- The document is `{ layout, gap, radius, background, cells: [{ source, zoom, offsetX, offsetY }] }`. `source` indexes the photos you hand in, so the same engine also lays out editor previews or adjusted bitmaps.
+- `gap` is both the outer border and the gutter (0…0.06 of the frame side); `radius` is a fraction of the shorter cell side (0…0.5); the background is always painted first, so rounded corners never turn into transparent JPEG holes.
+- Drag pans, wheel or pinch zooms (1…4×), double-click/double-tap resets a cell, arrow keys nudge and `0` resets the selected cell.
+- `exportBlob()` renders the same geometry at 256…4096 px (PNG, JPEG or WebP); `save()` either hands the blob to `onSave` or downloads it.
+
 ### History
 - 60 entries by default (`maxHistory`)
 - Slider bursts coalesce into one entry using a 900 ms key window
@@ -253,6 +262,51 @@ editor.showTab('adjust');
 editor.openExport();
 editor.destroy(); // disposes listeners, bitmaps, GL resources and the root node
 ```
+
+---
+
+## Collage screen
+
+The collage screen is a sibling of the editor, not a tab, so a host can open it
+from a gallery or from the viewer. It only needs a container and photos:
+
+```ts
+import { createCollageEditor } from 'aurum-image-editor';
+
+const collage = createCollageEditor('#collage', {
+  sources: [fileA, fileB, canvasC], // URLs, Blobs, canvases, ImageBitmaps
+  exportSize: 2048,
+  locale: 'vi',
+  onSave(blob, state) {
+    // Upload the blob, or keep `state` to reopen the same document later.
+  },
+  onClose() {
+    collage.destroy();
+  },
+});
+
+await collage.ready;                  // photos decoded
+collage.addSources([fileD]);          // grows the layout up to nine cells
+collage.setState(savedState);         // layout + one crop per cell
+const blob = await collage.exportBlob('image/webp', 0.9);
+```
+
+| Member | Description |
+| --- | --- |
+| `ready` | Resolves after the initial photos decoded. |
+| `sourceCount` / `selectedCell` | Decoded photo count, and the highlighted cell (-1 when empty). |
+| `getState()` / `setState(state)` | Defensive copy and normalisation of the collage document. |
+| `setSources(inputs)` / `addSources(inputs)` | Replace (resets crops) or append photos; both cap at nine. |
+| `render()` | Re-render the preview immediately. |
+| `exportBlob(type?, quality?)` | `Promise<Blob \| null>` at `exportSize` (256…4096). |
+| `save()` | Export, then `onSave(blob, state)` or a download. |
+| `destroy()` | Remove the screen, listeners and pending frames. |
+
+`ensureCollageStyles()` injects `COLLAGE_CSS` plus the shared aurum tokens once;
+the screen is styled with the same `--au-*` variables as the editor.
+
+`collage.html` is the demo host page for this screen and reads the sample
+photos in `demo/`.
 
 ---
 
@@ -472,7 +526,11 @@ The demo harness installs the Trusted Types shims
 (`assets/demo-shim.js`) separately so the engine works under a
 `require-trusted-types-for 'script'` CSP.
 
-![aurum editor — liquid glass chrome and ruler sliders](demo/screenshot-aurum-editor.png)
+`collage.html` is the same kind of standalone page for the collage screen: it
+loads four sample photos, prints the document on every change (`?state=<json>`
+restores one) and downloads the exported PNG.
+
+![aurum editor - liquid glass chrome and ruler sliders](demo/screenshot-aurum-editor.png)
 
 ### Layout
 
