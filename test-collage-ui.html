@@ -21,7 +21,7 @@ import {
   COLLAGE_CSS,
   createCollageEditor,
   ensureCollageStyles,
-} from './dist/aurum.esm.js?v=20261122b';
+} from './dist/aurum.esm.js?v=20261124b';
 
 const log = document.getElementById('log');
 const lines = [];
@@ -92,18 +92,28 @@ function setRange(input, value) {
 function center(box, fx, fy) {
   return [box.left + box.width * fx, box.top + box.height * fy];
 }
-async function readBlob(blob, side) {
+async function readBlob(blob, width, height = width) {
   const bitmap = await createImageBitmap(blob);
   const canvas = document.createElement('canvas');
-  canvas.width = side;
-  canvas.height = side;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(bitmap, 0, 0, side, side);
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  const natural = { width: bitmap.width, height: bitmap.height };
   bitmap.close?.();
-  return (x, y) => {
+  const read = (x, y) => {
     const data = ctx.getImageData(x, y, 1, 1).data;
     return [data[0], data[1], data[2], data[3]];
   };
+  read.width = natural.width;
+  read.height = natural.height;
+  return read;
+}
+async function blobSize(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const size = { width: bitmap.width, height: bitmap.height };
+  bitmap.close?.();
+  return size;
 }
 
 // ---------------------------------------------------------------- exports
@@ -144,8 +154,10 @@ const collage = createCollageEditor('#app', {
 });
 await collage.ready;
 const root = collage.element;
+const stage = root.querySelector('.au-collage__stage');
 const canvas = root.querySelector('.au-collage__stage canvas');
 const rail = root.querySelector('.au-collage__rail');
+const sizeRail = root.querySelector('.au-collage__sizes');
 
 ok('two sources decode', collage.sourceCount === 2);
 ok('stage leaves the empty state',
@@ -164,6 +176,22 @@ ok('active rail button matches the layout',
   rail.querySelector('.au-collage__layout.is-active')?.dataset.layout === 'duo-split');
 ok('the gesture hint starts visible',
   !root.querySelector('.au-collage__hint').classList.contains('is-hidden'));
+
+// ---------------------------------------------------------------- size presets
+ok('size rail lists six presets',
+  sizeRail.querySelectorAll('.au-collage__size').length === 6);
+ok('square is the active size',
+  collage.getState().size === 'square'
+  && sizeRail.querySelector('.au-collage__size.is-active')?.dataset.size === 'square');
+sizeRail.querySelector('[data-size="portrait"]').click();
+ok('size rail writes the document', collage.getState().size === 'portrait');
+ok('the stage declares the portrait size', stage.dataset.size === 'portrait');
+const portraitBox = stage.getBoundingClientRect();
+ok('the stage follows the 4:5 ratio',
+  Math.abs(portraitBox.width / portraitBox.height - 0.8) < 0.03,
+  `${portraitBox.width.toFixed(1)} × ${portraitBox.height.toFixed(1)}`);
+sizeRail.querySelector('[data-size="square"]').click();
+ok('the square preset restores the frame', collage.getState().size === 'square');
 
 const box = canvas.getBoundingClientRect();
 const [leftX, midY] = center(box, 0.25, 0.5);
@@ -197,6 +225,21 @@ ok('background swatch writes the document',
 collage.setState({ ...collage.getState(), background: 'not-a-colour' });
 ok('invalid background falls back to white',
   collage.getState().background === '#ffffff');
+const gradientSwatch = root.querySelector('.au-collage__swatch--gradient');
+gradientSwatch.click();
+ok('gradient swatch writes both stops', (() => {
+  const state = collage.getState();
+  return state.background === '#f7e7c3' && state.backgroundEnd === '#d4a24a';
+})());
+ok('the active gradient swatch is highlighted',
+  gradientSwatch.classList.contains('is-active'));
+collage.setState({ ...collage.getState(), gap: 0.06 });
+const gradientBlob = await collage.exportBlob('image/png');
+const gradientPixel = await readBlob(gradientBlob, 256);
+ok('the gradient paints the frame border',
+  sameColor(gradientPixel(2, 2), [247, 231, 195], 12)
+  && sameColor(gradientPixel(253, 253), [212, 162, 74], 16),
+  `${gradientPixel(2, 2)} -> ${gradientPixel(253, 253)}`);
 
 // Back to duo-split for the gestures.
 collage.setState({ layout: 'duo-split', gap: 0, radius: 0, background: '#101014' });
@@ -278,6 +321,35 @@ ok('radius clips the corner of a cell', sameColor(rounded(2, 2), [16, 16, 20]), 
 const jpeg = await collage.exportBlob('image/jpeg', 0.9);
 ok('jpeg export is available', jpeg instanceof Blob && jpeg.type === 'image/jpeg');
 
+// ---------------------------------------------------------------- frame sizes
+collage.setState({
+  layout: 'duo-split',
+  size: 'portrait',
+  gap: 0,
+  radius: 0,
+  background: '#101014',
+  cells: [
+    { source: 0, zoom: 1, offsetX: 0, offsetY: 0 },
+    { source: 1, zoom: 1, offsetX: 0, offsetY: 0 },
+  ],
+});
+const portraitExport = await blobSize(await collage.exportBlob('image/png'));
+ok('a 4:5 export is 205 × 256',
+  portraitExport.width === 205 && portraitExport.height === 256,
+  `${portraitExport.width} × ${portraitExport.height}`);
+
+collage.setState({ ...collage.getState(), size: 'story' });
+const storyExport = await blobSize(await collage.exportBlob('image/png'));
+ok('a 9:16 export is 144 × 256',
+  storyExport.width === 144 && storyExport.height === 256,
+  `${storyExport.width} × ${storyExport.height}`);
+
+collage.setState({ ...collage.getState(), size: 'landscape' });
+const landscapeExport = await blobSize(await collage.exportBlob('image/png'));
+ok('a 16:9 export is 256 × 144',
+  landscapeExport.width === 256 && landscapeExport.height === 144,
+  `${landscapeExport.width} × ${landscapeExport.height}`);
+
 collage.destroy();
 ok('destroy clears the main screen', document.querySelectorAll('.au-collage').length === 0);
 
@@ -324,15 +396,48 @@ const saved = createCollageEditor('#app3', {
   sources: [red, blue],
   exportSize: 128,
   onSave(blobToSave, savedState) {
-    window.__saved = { size: blobToSave.size, layout: savedState.layout };
+    window.__saved = {
+      size: blobToSave.size,
+      type: blobToSave.type,
+      layout: savedState.layout,
+      document: savedState.size,
+    };
   },
 });
 await saved.ready;
+const savedRoot = saved.element;
+ok('format rail lists png, jpeg and webp',
+  savedRoot.querySelectorAll('.au-collage__format').length === 3);
+ok('png is the default format',
+  savedRoot.querySelector('.au-collage__format.is-active')?.dataset.format === 'image/png');
+savedRoot.querySelector('[data-format="image/jpeg"]').click();
+ok('the format control switches to jpeg',
+  savedRoot.querySelector('.au-collage__format.is-active')?.dataset.format === 'image/jpeg');
 await saved.save();
 ok('save hands the blob to the host callback',
   window.__saved && window.__saved.size > 0 && window.__saved.layout !== undefined,
   window.__saved ? `${window.__saved.size} bytes` : 'none');
+ok('save encodes in the selected format',
+  window.__saved?.type === 'image/jpeg',
+  window.__saved?.type ?? 'none');
+ok('save hands over the current size preset',
+  window.__saved?.document === 'square',
+  window.__saved?.document ?? 'none');
 saved.destroy();
+
+const autoFrame = createCollageEditor('#app3', {
+  sources: [solid('#ff0000', 200, 100), solid('#0000ff', 200, 100)],
+  exportSize: 256,
+  size: 'auto',
+});
+await autoFrame.ready;
+ok('auto mode is the active size',
+  autoFrame.element.querySelector('.au-collage__size.is-active')?.dataset.size === 'auto');
+const autoExport = await blobSize(await autoFrame.exportBlob('image/png'));
+ok('auto follows the first photo ratio',
+  autoExport.width === 256 && autoExport.height === 128,
+  `${autoExport.width} × ${autoExport.height}`);
+autoFrame.destroy();
 
 trio.destroy();
 

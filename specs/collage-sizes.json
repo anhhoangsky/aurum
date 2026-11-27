@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "sizes": [
+    { "id": "auto", "ratio": null },
+    { "id": "square", "ratio": 1 },
+    { "id": "portrait", "ratio": 0.8 },
+    { "id": "classic", "ratio": 0.75 },
+    { "id": "landscape", "ratio": 1.7777777777777777 },
+    { "id": "story", "ratio": 0.5625 }
+  ]
+}

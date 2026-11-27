@@ -1,4 +1,5 @@
 import layoutsJson from '../../specs/layouts.json';
+import sizesJson from '../../specs/collage-sizes.json';
 import { clamp, finite } from './state';
 
 /**
@@ -26,6 +27,17 @@ export interface CollageLayout {
 }
 
 /**
+ * One output-size preset of the shared spec.
+ *
+ * `ratio` is width / height. `null` means "the first photo's ratio", clamped
+ * to a sane range so a panorama cannot turn the frame into a strip.
+ */
+export interface CollageSize {
+  id: string;
+  ratio: number | null;
+}
+
+/**
  * How one photo sits inside its cell.
  *
  * `zoom` 1 covers the cell exactly; larger values crop in. The offsets are a
@@ -44,11 +56,15 @@ export interface CollageCellState {
 /** The editable collage document. */
 export interface CollageState {
   layout: string;
-  /** Gutter between and around the cells, a fraction of the frame side. */
+  /** Output-size preset id from `specs/collage-sizes.json`. */
+  size: string;
+  /** Gutter between and around the cells, a fraction of the shorter side. */
   gap: number;
   /** Corner radius, a fraction of the shorter side of each cell. */
   radius: number;
   background: string;
+  /** Second stop of the diagonal gradient; empty keeps the fill solid. */
+  backgroundEnd: string;
   cells: CollageCellState[];
 }
 
@@ -71,8 +87,10 @@ export type CollageSource =
   | OffscreenCanvas;
 
 export interface CollageRenderOptions {
-  /** Output side in pixels. Defaults to the canvas width. */
+  /** Output width in pixels. Defaults to the canvas width. */
   size?: number;
+  /** Output height in pixels. Defaults to the width (a square frame). */
+  height?: number;
 }
 
 export const COLLAGE_MIN_CELLS = 2;
@@ -84,6 +102,10 @@ export const COLLAGE_MAX_RADIUS = 0.5;
 export const COLLAGE_MAX_ZOOM = 4;
 export const COLLAGE_DEFAULT_GAP = 0.012;
 export const COLLAGE_DEFAULT_BACKGROUND = '#ffffff';
+export const COLLAGE_DEFAULT_SIZE = 'square';
+/** `auto` stays useful for panoramas without producing a strip. */
+export const COLLAGE_MIN_ASPECT = 0.25;
+export const COLLAGE_MAX_ASPECT = 4;
 
 interface LayoutFile {
   version: number;
@@ -169,23 +191,123 @@ export function collageLayoutsFor(count: number): CollageLayout[] {
   return COLLAGE_LAYOUTS.filter((layout) => layout.cellCount === wanted);
 }
 
+interface SizeFile {
+  version: number;
+  sizes: { id: string; ratio: number | null }[];
+}
+
+const sizeFile = sizesJson as unknown as SizeFile;
+
+function buildSizes(): CollageSize[] {
+  if (sizeFile.version !== 1 || !Array.isArray(sizeFile.sizes)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: CollageSize[] = [];
+  for (const entry of sizeFile.sizes) {
+    if (
+      !entry ||
+      typeof entry.id !== 'string' ||
+      !entry.id ||
+      seen.has(entry.id)
+    ) {
+      continue;
+    }
+    const ratio = entry.ratio;
+    if (
+      ratio !== null &&
+      (typeof ratio !== 'number' ||
+        !Number.isFinite(ratio) ||
+        ratio <= 0 ||
+        ratio < COLLAGE_MIN_ASPECT ||
+        ratio > COLLAGE_MAX_ASPECT)
+    ) {
+      continue;
+    }
+    seen.add(entry.id);
+    out.push({ id: entry.id, ratio });
+  }
+  return out;
+}
+
+/** Every valid size preset of the shared spec, in rail order. */
+export const COLLAGE_SIZES: readonly CollageSize[] = buildSizes();
+
+const sizeById = new Map<string, CollageSize>(
+  COLLAGE_SIZES.map((size) => [size.id, size]),
+);
+
+/** The size preset with this id, or null when the spec does not name it. */
+export function collageSize(id: unknown): CollageSize | null {
+  return typeof id === 'string' ? sizeById.get(id) ?? null : null;
+}
+
 /**
- * The gap shrinks the whole grid by `gap` and every cell by another `gap / 2`
- * on each side, so the outer border and the gutters all measure one gap.
+ * The frame's width / height for a document.
+ *
+ * A fixed preset returns its ratio; `auto` follows the first photo and is
+ * clamped so an extreme panorama still produces a usable canvas.
+ */
+export function collageAspect(
+  sizeID: string,
+  source?: { width: number; height: number } | null,
+): number {
+  const size = collageSize(sizeID);
+  if (!size) return 1;
+  if (size.ratio !== null) return size.ratio;
+  if (!source) return 1;
+  const width = finite(source.width, 0);
+  const height = finite(source.height, 0);
+  if (width <= 0 || height <= 0) return 1;
+  return clamp(width / height, COLLAGE_MIN_ASPECT, COLLAGE_MAX_ASPECT);
+}
+
+/**
+ * Pixel dimensions for an export whose longest side is `maxSide`.
+ *
+ * The width is rounded first and the height follows the exact ratio, so a
+ * 4:5 export at 2048 is 1638 × 2048 rather than 1638 × 2048.75.
+ */
+export function collageFrameSize(
+  sizeID: string,
+  source: { width: number; height: number } | null | undefined,
+  maxSide: number,
+): { width: number; height: number } {
+  const side = Math.max(1, Math.round(finite(maxSide, 2048)));
+  const aspect = collageAspect(sizeID, source);
+  if (aspect >= 1) {
+    return {
+      width: side,
+      height: Math.max(1, Math.round(side / aspect)),
+    };
+  }
+  return {
+    width: Math.max(1, Math.round(side * aspect)),
+    height: side,
+  };
+}
+
+/**
+ * The gap shrinks the whole grid by `gap` and every cell by another `gap`
+ * on each side, so the outer border and the gutters all measure one gap in
+ * pixels. `gapY` lets a rectangular frame keep that pixel width vertical.
  */
 export function collageCellRects(
   layout: CollageLayout | string,
   gap: number,
+  gapY: number = gap,
 ): CollageRect[] {
   const target = typeof layout === 'string' ? collageLayout(layout) : layout;
   if (!target) return [];
   const gutter = clamp(finite(gap, 0), 0, COLLAGE_MAX_GAP);
+  const gutterY = clamp(finite(gapY, gutter), 0, COLLAGE_MAX_GAP);
   const scale = 1 - gutter;
+  const scaleY = 1 - gutterY;
   return target.cells.map((cell) => ({
     x: gutter + cell.x * scale,
-    y: gutter + cell.y * scale,
+    y: gutterY + cell.y * scaleY,
     width: Math.max(0, cell.width * scale - gutter),
-    height: Math.max(0, cell.height * scale - gutter),
+    height: Math.max(0, cell.height * scaleY - gutterY),
   }));
 }
 
@@ -254,6 +376,14 @@ function normalizeBackground(value: unknown): string {
   return COLLAGE_DEFAULT_BACKGROUND;
 }
 
+/** Like `normalizeBackground`, but an invalid stop means "no gradient". */
+function normalizeOptionalBackground(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const text = value.trim().toLowerCase();
+  if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(text)) return '';
+  return normalizeBackground(text);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -276,9 +406,11 @@ export function normalizeCollageState(input: unknown): CollageState {
   if (!layout) {
     return {
       layout: '',
+      size: COLLAGE_DEFAULT_SIZE,
       gap: COLLAGE_DEFAULT_GAP,
       radius: 0,
       background: COLLAGE_DEFAULT_BACKGROUND,
+      backgroundEnd: '',
       cells: [],
     };
   }
@@ -291,11 +423,16 @@ export function normalizeCollageState(input: unknown): CollageState {
       offsetY: clamp(finite(cell.offsetY, 0), -1, 1),
     };
   });
+  const background = normalizeBackground(raw.background);
+  let backgroundEnd = normalizeOptionalBackground(raw.backgroundEnd);
+  if (backgroundEnd === background) backgroundEnd = '';
   return {
     layout: layout.id,
+    size: collageSize(raw.size)?.id ?? COLLAGE_DEFAULT_SIZE,
     gap: clamp(finite(raw.gap, COLLAGE_DEFAULT_GAP), 0, COLLAGE_MAX_GAP),
     radius: clamp(finite(raw.radius, 0), 0, COLLAGE_MAX_RADIUS),
-    background: normalizeBackground(raw.background),
+    background,
+    backgroundEnd,
     cells,
   };
 }
@@ -310,9 +447,11 @@ export function defaultCollageState(
   }
   return {
     layout: layout.id,
+    size: COLLAGE_DEFAULT_SIZE,
     gap: COLLAGE_DEFAULT_GAP,
     radius: 0,
     background: COLLAGE_DEFAULT_BACKGROUND,
+    backgroundEnd: '',
     cells: layout.cells.map((_, index) => ({
       source: index,
       zoom: 1,
@@ -348,14 +487,31 @@ function roundedPath(
   ctx.closePath();
 }
 
+function paintBackground(
+  ctx: CanvasRenderingContext2D,
+  state: CollageState,
+  width: number,
+  height: number,
+): void {
+  if (state.backgroundEnd) {
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, state.background);
+    gradient.addColorStop(1, state.backgroundEnd);
+    ctx.fillStyle = gradient;
+  } else {
+    ctx.fillStyle = state.background;
+  }
+  ctx.fillRect(0, 0, width, height);
+}
+
 /**
  * Composite the document onto a 2D context.
  *
  * The host renders each cell (a child aurum state, an adjusted bitmap or a
  * plain photo) and passes the bitmaps in source order; this pass only lays
  * them out, so preview and export share one geometry. The whole frame is
- * painted with the background first, which also makes an opaque JPEG export
- * impossible to get wrong.
+ * painted with the background (or its gradient) first, which also makes an
+ * opaque JPEG export impossible to get wrong.
  */
 export function renderCollage(
   ctx: CanvasRenderingContext2D,
@@ -365,31 +521,36 @@ export function renderCollage(
 ): CollageState {
   const next = normalizeCollageState(state);
   const layout = collageLayout(next.layout);
-  const side = Math.max(
+  const width = Math.max(
     1,
     Math.round(finite(options.size, ctx.canvas.width || 2048)),
   );
+  const height = Math.max(1, Math.round(finite(options.height, width)));
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = next.background;
-  ctx.fillRect(0, 0, side, side);
+  paintBackground(ctx, next, width, height);
   if (!layout) {
     ctx.restore();
     return next;
   }
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  const rects = collageCellRects(layout, next.gap);
+  // The gap is measured in pixels on the shorter side, so a portrait or
+  // landscape frame keeps the same visible border and gutters.
+  const shortest = Math.min(width, height);
+  const gapX = (shortest * next.gap) / width;
+  const gapY = (shortest * next.gap) / height;
+  const rects = collageCellRects(layout, gapX, gapY);
   for (let index = 0; index < layout.cells.length; index += 1) {
     const rect = rects[index];
     if (!rect) continue;
-    const x0 = Math.round(rect.x * side);
-    const y0 = Math.round(rect.y * side);
-    const x1 = Math.round((rect.x + rect.width) * side);
-    const y1 = Math.round((rect.y + rect.height) * side);
-    const width = x1 - x0;
-    const height = y1 - y0;
-    if (width <= 0 || height <= 0) continue;
+    const x0 = Math.round(rect.x * width);
+    const y0 = Math.round(rect.y * height);
+    const x1 = Math.round((rect.x + rect.width) * width);
+    const y1 = Math.round((rect.y + rect.height) * height);
+    const cellWidth = x1 - x0;
+    const cellHeight = y1 - y0;
+    if (cellWidth <= 0 || cellHeight <= 0) continue;
     const cell = next.cells[index];
     const source = cell ? sources[cell.source] : undefined;
     ctx.save();
@@ -397,15 +558,15 @@ export function renderCollage(
       ctx,
       x0,
       y0,
-      width,
-      height,
-      next.radius * Math.min(width, height),
+      cellWidth,
+      cellHeight,
+      next.radius * Math.min(cellWidth, cellHeight),
     );
     ctx.clip();
     if (source) {
       const cover = collageCover(
         { width: source.width, height: source.height },
-        { width, height },
+        { width: cellWidth, height: cellHeight },
         cell,
       );
       if (cover.sw > 0 && cover.sh > 0) {
@@ -417,8 +578,8 @@ export function renderCollage(
           cover.sh,
           x0,
           y0,
-          width,
-          height,
+          cellWidth,
+          cellHeight,
         );
       }
     }

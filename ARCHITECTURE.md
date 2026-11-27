@@ -30,7 +30,7 @@ src/
     index.ts          standalone ESM entry (dist/aurum-landmarks.esm.js)
   ui/
     ui.ts             dark/gold editor chrome and interactions
-    collage-ui.ts     standalone 2-9 photo collage screen (rail, gestures, export)
+    collage-ui.ts     standalone 2-9 photo collage screen (size/layout rails, gestures, export)
     collage.css       collage screen styles, injected once beside the editor CSS
     styles.css        component styles (also shipped as dist/aurum.css)
     styles.ts         one-time CSS injection and UI_CSS export

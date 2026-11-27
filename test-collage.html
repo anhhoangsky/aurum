@@ -15,20 +15,25 @@
 <script type="module">
 import {
   COLLAGE_DEFAULT_GAP,
+  COLLAGE_DEFAULT_SIZE,
   COLLAGE_LAYOUTS,
   COLLAGE_MAX_GAP,
   COLLAGE_MAX_RADIUS,
   COLLAGE_MAX_ZOOM,
   COLLAGE_MIN_CELLS,
   COLLAGE_MAX_CELLS,
+  COLLAGE_SIZES,
+  collageAspect,
   collageCellRects,
   collageCover,
+  collageFrameSize,
   collageLayout,
   collageLayoutsFor,
+  collageSize,
   defaultCollageState,
   normalizeCollageState,
   renderCollage,
-} from './dist/aurum.esm.js?v=20261117d';
+} from './dist/aurum.esm.js?v=20261124a';
 
 const log = document.getElementById('log');
 const stage = document.getElementById('stage');
@@ -139,6 +144,27 @@ ok('a layout name built from another name is unknown', collageLayout('nine-grid-
 ok('three-photo layouts return 4 options', collageLayoutsFor(3).length === 4);
 ok('one photo has no layout', collageLayoutsFor(1).length === 0);
 
+// ---------------------------------------------------------------- sizes
+ok('six size presets load from the shared spec', COLLAGE_SIZES.length === 6);
+const sizeIDs = COLLAGE_SIZES.map((size) => size.id);
+ok('size ids are unique', new Set(sizeIDs).size === sizeIDs.length);
+ok('the square preset is the default', COLLAGE_DEFAULT_SIZE === 'square' && collageSize('square')?.ratio === 1);
+ok('the 4:5 preset is portrait', near(collageSize('portrait')?.ratio ?? 0, 0.8));
+ok('the 16:9 preset is landscape', near(collageSize('landscape')?.ratio ?? 0, 16 / 9));
+ok('an unknown size is null', collageSize('missing') === null);
+ok('a fixed size ignores the source ratio', near(collageAspect('square', { width: 300, height: 100 }), 1));
+ok('auto follows the first source', near(collageAspect('auto', { width: 1200, height: 800 }), 1.5));
+ok('auto clamps a panorama', near(collageAspect('auto', { width: 10000, height: 1000 }), 4));
+ok('auto without a source is square', near(collageAspect('auto', null), 1));
+const portraitFrame = collageFrameSize('portrait', null, 2048);
+ok('a 4:5 export is 1638 × 2048', portraitFrame.width === 1638 && portraitFrame.height === 2048);
+const landscapeFrame = collageFrameSize('landscape', null, 2048);
+ok('a 16:9 export is 2048 × 1152', landscapeFrame.width === 2048 && landscapeFrame.height === 1152);
+const storyFrame = collageFrameSize('story', null, 2048);
+ok('a 9:16 export is 1152 × 2048', storyFrame.width === 1152 && storyFrame.height === 2048);
+const autoFrame = collageFrameSize('auto', { width: 300, height: 200 }, 2048);
+ok('auto sizes the frame from the first source', autoFrame.width === 2048 && autoFrame.height === 1365);
+
 // ---------------------------------------------------------------- gap
 const duoNone = collageCellRects('duo-split', 0);
 ok('gap 0 restores the raw spec rects', rectNear(duoNone[0], 0, 0, 0.5, 1));
@@ -188,6 +214,14 @@ ok('the source index is a whole photo index', clamped.cells[0].source === 0 && c
 ok('the gap and radius clamp to the spec', near(clamped.gap, COLLAGE_MAX_GAP) && near(clamped.radius, COLLAGE_MAX_RADIUS));
 ok('a short background expands to six digits', clamped.background === '#aabbcc');
 ok('an invalid background falls back to white', normalizeCollageState({ background: 'red' }).background === '#ffffff');
+ok('the default size is square', base.size === 'square');
+ok('the default background has no gradient stop', base.backgroundEnd === '');
+const sized = normalizeCollageState({ size: 'story', background: '#101014', backgroundEnd: '#F3C77B' });
+ok('a known size survives normalization', sized.size === 'story');
+ok('a gradient stop expands to six digits', sized.backgroundEnd === '#f3c77b');
+ok('an unknown size falls back to square', normalizeCollageState({ size: 'missing' }).size === 'square');
+ok('an invalid gradient stop is dropped', normalizeCollageState({ backgroundEnd: 'red' }).backgroundEnd === '');
+ok('a stop equal to the fill is dropped', normalizeCollageState({ background: '#101014', backgroundEnd: '#101014' }).backgroundEnd === '');
 
 // ---------------------------------------------------------------- cover
 const square = { width: 100, height: 100 };
@@ -211,11 +245,14 @@ ok('a degenerate source has no cover box', collageCover({ width: 0, height: 0 },
 
 // ---------------------------------------------------------------- render
 const bg = '#101010';
-function paint(state, sources, size) {
-  stage.width = size;
-  stage.height = size;
+function paint(state, sources, width, height = width) {
+  stage.width = width;
+  stage.height = height;
   const ctx = stage.getContext('2d', { willReadFrequently: true });
-  const normalized = renderCollage(ctx, state, sources, { size });
+  const normalized = renderCollage(ctx, state, sources, {
+    size: width,
+    height,
+  });
   return { ctx, normalized };
 }
 const red = solid('#ff0000');
@@ -247,6 +284,37 @@ for (let index = 0; index < 9; index += 1) {
 }
 ok('all nine cells receive their own source', centersOk);
 ok('the nine-grid normalized gap stays at 0', grid.normalized.gap === 0);
+
+// ------------------------------------------------------- rectangular frame
+paint(
+  { layout: 'duo-stack', gap: 0, radius: 0, background: bg, size: 'landscape' },
+  [red, green],
+  200,
+  100,
+);
+ok('a landscape frame keeps the first row on top', sameColor(pixel(stage, 100, 25), [255, 0, 0]));
+ok('a landscape frame puts the second row below', sameColor(pixel(stage, 100, 75), [0, 255, 0]));
+paint(
+  { layout: 'duo-split', gap: 0.1, radius: 0, background: bg, size: 'story' },
+  [red, green],
+  200,
+  400,
+);
+ok('a portrait frame keeps an equal top border', sameColor(pixel(stage, 100, 10), [16, 16, 16]));
+ok('a portrait frame keeps an equal side border', sameColor(pixel(stage, 10, 200), [16, 16, 16]));
+ok('a portrait frame still fills both cells', sameColor(pixel(stage, 50, 200), [255, 0, 0]) && sameColor(pixel(stage, 150, 200), [0, 255, 0]));
+const gradient = paint(
+  { layout: 'duo-split', gap: 0, radius: 0, background: '#ff0000', backgroundEnd: '#0000ff' },
+  [],
+  100,
+);
+const topLeft = pixel(stage, 1, 1);
+const bottomRight = pixel(stage, 98, 98);
+const middle = pixel(stage, 50, 50);
+ok('a gradient starts at the first stop', sameColor(topLeft, [255, 0, 0], 8));
+ok('a gradient ends at the second stop', sameColor(bottomRight, [0, 0, 255], 8));
+ok('a gradient blends across the frame', middle[0] > 90 && middle[0] < 165 && middle[2] > 90 && middle[2] < 165);
+ok('the normalized document keeps the gradient stops', gradient.normalized.backgroundEnd === '#0000ff');
 
 out(`\n${pass} passed, ${fail} failed — ${fail === 0 ? 'ALL PASS' : 'FAILED'}`);
 document.title = `${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail}`;

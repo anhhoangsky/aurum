@@ -1,15 +1,20 @@
 import {
   COLLAGE_DEFAULT_BACKGROUND,
   COLLAGE_DEFAULT_GAP,
+  COLLAGE_DEFAULT_SIZE,
   COLLAGE_MAX_CELLS,
   COLLAGE_MAX_GAP,
   COLLAGE_MAX_RADIUS,
   COLLAGE_MAX_ZOOM,
   COLLAGE_MIN_CELLS,
+  COLLAGE_SIZES,
+  collageAspect,
   collageCellRects,
   collageCover,
+  collageFrameSize,
   collageLayout,
   collageLayoutsFor,
+  collageSize,
   defaultCollageState,
   normalizeCollageState,
   renderCollage,
@@ -43,6 +48,8 @@ export function ensureCollageStyles(): void {
 
 export type CollageLocale = 'vi' | 'en';
 
+export type CollageExportType = 'image/png' | 'image/jpeg' | 'image/webp';
+
 export type CollageInput =
   | string
   | Blob
@@ -56,8 +63,12 @@ export interface CollageUIOptions {
   sources?: CollageInput[];
   /** Preferred layout when the photo count matches it. */
   layout?: string;
+  /** Preferred output-size preset, e.g. `square` or `story`. */
+  size?: string;
   /** Export side in pixels, 256…4096. Defaults to 2048. */
   exportSize?: number;
+  /** Starting export format. Defaults to PNG. */
+  format?: CollageExportType;
   downloadName?: string;
   locale?: CollageLocale;
   /** Receives the encoded blob instead of the default download. */
@@ -84,6 +95,10 @@ interface Copy {
   reset: string;
   hint: string;
   layouts: string;
+  sizes: string;
+  auto: string;
+  format: string;
+  formatFallback: string;
   canvas: string;
   count: (count: number) => string;
   max: string;
@@ -111,6 +126,10 @@ const COPY: Record<CollageLocale, Copy> = {
     reset: 'Đặt lại',
     hint: 'Kéo để căn · chụm hoặc cuộn để zoom · chạm đúp để đặt lại',
     layouts: 'Bố cục',
+    sizes: 'Kích thước',
+    auto: 'Tự động',
+    format: 'Định dạng',
+    formatFallback: 'Trình duyệt không hỗ trợ định dạng này, đã lưu PNG.',
     canvas: 'Khung ghép ảnh. Kéo để căn ảnh, cuộn để zoom, nhấp đúp để đặt lại.',
     count: (count) => `${count}/${COLLAGE_MAX_CELLS} ảnh`,
     max: 'Tối đa 9 ảnh.',
@@ -136,6 +155,10 @@ const COPY: Record<CollageLocale, Copy> = {
     reset: 'Reset',
     hint: 'Drag to position · pinch or scroll to zoom · double-tap to reset',
     layouts: 'Layout',
+    sizes: 'Size',
+    auto: 'Auto',
+    format: 'Format',
+    formatFallback: 'This browser does not support that format; saved PNG instead.',
     canvas: 'Collage canvas. Drag to position, scroll to zoom, double-tap to reset.',
     count: (count) => `${count}/${COLLAGE_MAX_CELLS} photos`,
     max: 'Up to 9 photos.',
@@ -168,6 +191,29 @@ const LAYOUT_NAMES: Record<string, string> = {
   'nine-grid': 'Chín lưới',
 };
 
+const SIZE_NAMES: Record<string, string> = {
+  square: '1:1',
+  portrait: '4:5',
+  classic: '3:4',
+  landscape: '16:9',
+  story: '9:16',
+};
+
+/** Diagonal two-stop presets; the first stop is the document background. */
+const GRADIENT_PRESETS: readonly (readonly [string, string])[] = [
+  ['#f7e7c3', '#d4a24a'],
+  ['#2d2a4a', '#101014'],
+  ['#ffd9c0', '#f3a6a0'],
+  ['#d9f3e3', '#8fcfb4'],
+  ['#cfe4ff', '#9db8e8'],
+];
+
+const FORMATS: readonly { type: CollageExportType; label: string }[] = [
+  { type: 'image/png', label: 'PNG' },
+  { type: 'image/jpeg', label: 'JPEG' },
+  { type: 'image/webp', label: 'WebP' },
+];
+
 const ICONS = {
   collage:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="5" rx="2"/><rect x="13" y="10" width="8" height="11" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/></svg>',
@@ -196,7 +242,9 @@ interface CollageDom {
   empty: HTMLDivElement;
   chooseButton: HTMLButtonElement;
   hint: HTMLDivElement;
+  sizeRail: HTMLDivElement;
   rail: HTMLDivElement;
+  formats: HTMLDivElement;
   gapInput: HTMLInputElement;
   gapValue: HTMLElement;
   radiusInput: HTMLInputElement;
@@ -269,11 +317,15 @@ export class AurumCollage {
   private readonly abort = new AbortController();
   private readonly dom: CollageDom;
   private readonly layoutButtons = new Map<string, HTMLButtonElement>();
+  private readonly sizeButtons = new Map<string, HTMLButtonElement>();
+  private readonly formatButtons = new Map<CollageExportType, HTMLButtonElement>();
   private readonly pointers = new Map<number, Point>();
   private readonly swatchButtons: HTMLButtonElement[] = [];
+  private readonly gradientButtons: HTMLButtonElement[] = [];
   private state: CollageState;
   private sources: CollageSource[] = [];
   private selected = 0;
+  private exportFormat: CollageExportType;
   private drag: {
     cell: number;
     lastX: number;
@@ -300,7 +352,11 @@ export class AurumCollage {
     this.copy = COPY[options.locale === 'en' ? 'en' : 'vi'];
     ensureCollageStyles();
 
-    this.state = defaultCollageState(options.layout ?? 'duo-split');
+    this.state = normalizeCollageState({
+      ...defaultCollageState(options.layout ?? 'duo-split'),
+      size: options.size ?? COLLAGE_DEFAULT_SIZE,
+    });
+    this.exportFormat = options.format ?? 'image/png';
     this.dom = this.buildDom();
     this.element = this.dom.root;
     this.host.appendChild(this.element);
@@ -411,18 +467,28 @@ export class AurumCollage {
 
   /** Encode the full-size collage. */
   async exportBlob(
-    type: 'image/png' | 'image/jpeg' | 'image/webp' = 'image/png',
+    type: CollageExportType = 'image/png',
     quality = 0.92,
   ): Promise<Blob | null> {
     if (this.sources.length < COLLAGE_MIN_CELLS) return null;
     if (!collageLayout(this.state.layout)) return null;
-    const side = Math.round(clamp(this.options.exportSize ?? 2048, 256, 4096));
+    const maxSide = Math.round(
+      clamp(this.options.exportSize ?? 2048, 256, 4096),
+    );
+    const frame = collageFrameSize(
+      this.state.size,
+      this.sources[0],
+      maxSide,
+    );
     const canvas = document.createElement('canvas');
-    canvas.width = side;
-    canvas.height = side;
+    canvas.width = frame.width;
+    canvas.height = frame.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    renderCollage(ctx, this.state, this.sources, { size: side });
+    renderCollage(ctx, this.state, this.sources, {
+      size: frame.width,
+      height: frame.height,
+    });
     return new Promise((resolve) => {
       canvas.toBlob(resolve, type, quality);
     });
@@ -435,17 +501,22 @@ export class AurumCollage {
     this.dom.saveButton.disabled = true;
     this.dom.saveButton.textContent = this.copy.saving;
     try {
-      const blob = await this.exportBlob();
+      const requested = this.exportFormat;
+      const blob = await this.exportBlob(requested);
       if (!blob) {
         this.toast(this.copy.exportFail);
         return;
+      }
+      if (blob.type && blob.type !== requested) {
+        this.toast(this.copy.formatFallback);
+      } else {
+        this.toast(this.copy.saved);
       }
       if (this.options.onSave) {
         await this.options.onSave(blob, this.getState());
       } else {
         downloadBlob(blob, this.options.downloadName ?? this.defaultName(blob));
       }
-      this.toast(this.copy.saved);
     } catch {
       this.toast(this.copy.exportFail);
     } finally {
@@ -544,6 +615,22 @@ export class AurumCollage {
     const hint = el('div', 'au-collage__hint', this.copy.hint);
     stage.appendChild(hint);
 
+    const sizeRail = el('div', 'au-collage__sizes');
+    sizeRail.setAttribute('role', 'group');
+    sizeRail.setAttribute('aria-label', this.copy.sizes);
+    for (const size of COLLAGE_SIZES) {
+      const button = el('button', 'au-collage__size', this.sizeName(size.id));
+      button.type = 'button';
+      button.dataset.size = size.id;
+      button.addEventListener(
+        'click',
+        () => this.setSize(size.id),
+        { signal: this.abort.signal },
+      );
+      this.sizeButtons.set(size.id, button);
+      sizeRail.appendChild(button);
+    }
+
     const rail = el('div', 'au-collage__rail');
     rail.setAttribute('role', 'group');
     rail.setAttribute('aria-label', this.copy.layouts);
@@ -598,6 +685,27 @@ export class AurumCollage {
       this.swatchButtons.push(swatch);
       swatches.appendChild(swatch);
     }
+    for (const [from, to] of GRADIENT_PRESETS) {
+      const swatch = el(
+        'button',
+        'au-collage__swatch au-collage__swatch--gradient',
+      );
+      swatch.type = 'button';
+      swatch.style.background = `linear-gradient(135deg, ${from}, ${to})`;
+      swatch.dataset.gradient = `${from},${to}`;
+      swatch.title = `${from} → ${to}`;
+      swatch.setAttribute(
+        'aria-label',
+        `${this.copy.background} ${from} → ${to}`,
+      );
+      swatch.addEventListener(
+        'click',
+        () => this.setBackground(from, to),
+        { signal: this.abort.signal },
+      );
+      this.gradientButtons.push(swatch);
+      swatches.appendChild(swatch);
+    }
     const custom = el('label', 'au-collage__swatch au-collage__swatch--custom');
     custom.title = this.copy.background;
     const colorInput = el('input');
@@ -624,15 +732,30 @@ export class AurumCollage {
     cellBar.append(cellName, zoomWrap, resetButton);
 
     panel.append(gapGroup, radiusGroup, backgroundGroup, cellBar);
-    body.append(stage, rail, panel);
+    body.append(stage, sizeRail, rail, panel);
 
     const foot = el('footer', 'au-collage__foot');
     const count = el('div', 'au-collage__count');
+    const formats = el('div', 'au-collage__formats');
+    formats.setAttribute('role', 'group');
+    formats.setAttribute('aria-label', this.copy.format);
+    for (const format of FORMATS) {
+      const button = el('button', 'au-collage__format', format.label);
+      button.type = 'button';
+      button.dataset.format = format.type;
+      button.addEventListener(
+        'click',
+        () => this.setFormat(format.type),
+        { signal: this.abort.signal },
+      );
+      this.formatButtons.set(format.type, button);
+      formats.appendChild(button);
+    }
     const saveButton = el('button', 'au-collage__save');
     saveButton.type = 'button';
     saveButton.disabled = true;
     saveButton.innerHTML = `${ICONS.save}<span>${this.copy.save}</span>`;
-    foot.append(count, saveButton);
+    foot.append(count, formats, saveButton);
 
     const status = el('div', 'au-collage__status');
     status.setAttribute('role', 'status');
@@ -650,7 +773,9 @@ export class AurumCollage {
       empty,
       chooseButton,
       hint,
+      sizeRail,
       rail,
+      formats,
       gapInput,
       gapValue,
       radiusInput,
@@ -1074,9 +1199,11 @@ export class AurumCollage {
       : defaultCollageState();
     this.state = normalizeCollageState({
       ...base,
+      size: this.state.size,
       gap: this.state.gap,
       radius: this.state.radius,
       background: this.state.background,
+      backgroundEnd: this.state.backgroundEnd,
     });
     this.selected = 0;
     this.hintDismissed = false;
@@ -1119,16 +1246,45 @@ export class AurumCollage {
     this.emitState();
   }
 
-  private setBackground(value: string): void {
-    const background = normalizeCollageState({
+  private setBackground(value: string, end = ''): void {
+    const next = normalizeCollageState({
       ...this.state,
       background: value,
-    }).background;
-    if (background === this.state.background) return;
-    this.state.background = background;
+      backgroundEnd: end,
+    });
+    if (
+      next.background === this.state.background
+      && next.backgroundEnd === this.state.backgroundEnd
+    ) {
+      return;
+    }
+    this.state.background = next.background;
+    this.state.backgroundEnd = next.backgroundEnd;
     this.updateBackgroundUI();
     this.scheduleRender();
     this.emitState();
+  }
+
+  private setSize(id: string): void {
+    if (!collageSize(id) || id === this.state.size) return;
+    this.state = normalizeCollageState({ ...this.state, size: id });
+    this.updateUI();
+    this.scheduleRender();
+    this.emitState();
+  }
+
+  private setFormat(type: CollageExportType): void {
+    this.exportFormat = type;
+    for (const [key, button] of this.formatButtons) {
+      const active = key === type;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+  }
+
+  private sizeName(id: string): string {
+    if (id === 'auto') return this.copy.auto;
+    return SIZE_NAMES[id] ?? id;
   }
 
   // ---------------------------------------------------------------- view
@@ -1188,10 +1344,23 @@ export class AurumCollage {
       button.classList.toggle('is-active', active);
       button.setAttribute('aria-pressed', String(active));
     }
-    this.dom.backgroundValue.textContent = this.state.background;
+    for (const [id, button] of this.sizeButtons) {
+      const active = id === this.state.size;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+    this.setFormat(this.exportFormat);
+    this.applyFrame();
     this.updateControlLabels();
     this.updateBackgroundUI();
     this.updateCellControls();
+  }
+
+  /** Keep the stage's box and the size rail in sync with the document. */
+  private applyFrame(): void {
+    const aspect = collageAspect(this.state.size, this.sources[0] ?? null);
+    this.dom.stage.style.setProperty('--au-collage-ratio', String(aspect));
+    this.dom.stage.dataset.size = this.state.size;
   }
 
   private updateControlLabels(): void {
@@ -1203,16 +1372,27 @@ export class AurumCollage {
 
   private updateBackgroundUI(): void {
     const background = this.state.background.toLowerCase();
+    const end = this.state.backgroundEnd.toLowerCase();
     for (const swatch of this.swatchButtons) {
       swatch.classList.toggle(
         'is-active',
-        swatch.dataset.color === background,
+        !end && swatch.dataset.color === background,
+      );
+    }
+    for (const swatch of this.gradientButtons) {
+      const pair = swatch.dataset.gradient ?? '';
+      const [from, to] = pair.split(',');
+      swatch.classList.toggle(
+        'is-active',
+        Boolean(end) && from === background && to === end,
       );
     }
     if (this.dom.colorInput.value.toLowerCase() !== background) {
       this.dom.colorInput.value = background;
     }
-    this.dom.backgroundValue.textContent = background;
+    this.dom.backgroundValue.textContent = end
+      ? `${background} → ${end}`
+      : background;
   }
 
   private updateCellControls(): void {
@@ -1237,34 +1417,41 @@ export class AurumCollage {
     if (this.destroyed) return;
     const canvas = this.dom.canvas;
     const stageWidth = this.dom.stage.clientWidth || 360;
+    const stageHeight = this.dom.stage.clientHeight || stageWidth;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const side = Math.max(320, Math.min(1080, Math.round(stageWidth * dpr)));
-    if (canvas.width !== side || canvas.height !== side) {
-      canvas.width = side;
-      canvas.height = side;
+    const longest = Math.max(stageWidth, stageHeight);
+    const scale = Math.min(dpr, 1080 / Math.max(1, longest));
+    const width = Math.max(1, Math.round(stageWidth * scale));
+    const height = Math.max(1, Math.round(stageHeight * scale));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
     }
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     if (this.sources.length < COLLAGE_MIN_CELLS) {
-      ctx.clearRect(0, 0, side, side);
+      ctx.clearRect(0, 0, width, height);
       return;
     }
-    renderCollage(ctx, this.state, this.sources, { size: side });
+    renderCollage(ctx, this.state, this.sources, { size: width, height });
 
     const layout = collageLayout(this.state.layout);
+    const shortest = Math.min(width, height);
+    const gapX = (shortest * this.state.gap) / width;
+    const gapY = (shortest * this.state.gap) / height;
     const rect = layout
-      ? collageCellRects(layout, this.state.gap)[this.selected]
+      ? collageCellRects(layout, gapX, gapY)[this.selected]
       : undefined;
     if (rect) {
-      const inset = Math.max(1, side / 600);
+      const inset = Math.max(1, shortest / 600);
       ctx.save();
       ctx.strokeStyle = 'rgba(243,199,123,.92)';
-      ctx.lineWidth = Math.max(2, side / 240);
+      ctx.lineWidth = Math.max(2, shortest / 240);
       ctx.strokeRect(
-        rect.x * side + inset,
-        rect.y * side + inset,
-        Math.max(0, rect.width * side - inset * 2),
-        Math.max(0, rect.height * side - inset * 2),
+        rect.x * width + inset,
+        rect.y * height + inset,
+        Math.max(0, rect.width * width - inset * 2),
+        Math.max(0, rect.height * height - inset * 2),
       );
       ctx.restore();
     }

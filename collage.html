@@ -51,12 +51,17 @@ const collage = createCollageEditor(host, {
   },
   onSave(blob) {
     const url = URL.createObjectURL(blob);
+    const extension = blob.type === 'image/jpeg'
+      ? 'jpg'
+      : blob.type === 'image/webp'
+        ? 'webp'
+        : 'png';
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'aurum-collage.png';
+    a.download = `aurum-collage.${extension}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-    flash(`Đã xuất ${(blob.size / 1024).toFixed(0)} KB`);
+    flash(`Đã xuất ${extension.toUpperCase()} · ${(blob.size / 1024).toFixed(0)} KB`);
   },
 });
 

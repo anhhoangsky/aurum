@@ -204,13 +204,15 @@ The fragment pipeline is assembled from GLSL modules at build time; the browser 
 Preset thumbnails are generated at 128 px from the loaded preview, so they match the actual image.
 
 ### Collage
-`AurumCollage` is a separate square screen that lays 2–9 photos out without touching the editor.
+`AurumCollage` is a separate screen that lays 2–9 photos out without touching the editor.
 
 - 19 layouts come from `specs/layouts.json` (a 12-unit grid shared byte-for-byte with the Swift client); the rail only offers layouts whose cell count matches the selected photos.
-- The document is `{ layout, gap, radius, background, cells: [{ source, zoom, offsetX, offsetY }] }`. `source` indexes the photos you hand in, so the same engine also lays out editor previews or adjusted bitmaps.
-- `gap` is both the outer border and the gutter (0…0.06 of the frame side); `radius` is a fraction of the shorter cell side (0…0.5); the background is always painted first, so rounded corners never turn into transparent JPEG holes.
+- Six frame presets (`auto`, `square`, `portrait` 4:5, `classic` 3:4, `landscape` 16:9, `story` 9:16) come from `specs/collage-sizes.json`. `auto` follows the first photo's ratio, clamped 0.25…4 so a panorama cannot become a strip.
+- The document is `{ layout, size, gap, radius, background, backgroundEnd, cells: [{ source, zoom, offsetX, offsetY }] }`. `source` indexes the photos you hand in, so the same engine also lays out editor previews or adjusted bitmaps.
+- `gap` is both the outer border and the gutter (0…0.06 of the shorter side), so a rectangular frame keeps the same pixel border on every edge; `radius` is a fraction of the shorter cell side (0…0.5). The background is always painted first, solid or as a top-left → bottom-right two-stop gradient, so rounded corners never turn into transparent JPEG holes.
+- The preview stage follows the frame ratio, and the size rail sits directly above the layout rail.
 - Drag pans, wheel or pinch zooms (1…4×), double-click/double-tap resets a cell, arrow keys nudge and `0` resets the selected cell.
-- `exportBlob()` renders the same geometry at 256…4096 px (PNG, JPEG or WebP); `save()` either hands the blob to `onSave` or downloads it.
+- `exportBlob()` renders the same geometry with the longest side at 256…4096 px (PNG, JPEG or WebP); the format control falls back to PNG with a visible message when the browser cannot encode the requested type. `save()` either hands the blob to `onSave` or downloads it.
 
 ### History
 - 60 entries by default (`maxHistory`)
@@ -275,7 +277,9 @@ import { createCollageEditor } from 'aurum-image-editor';
 
 const collage = createCollageEditor('#collage', {
   sources: [fileA, fileB, canvasC], // URLs, Blobs, canvases, ImageBitmaps
-  exportSize: 2048,
+  size: 'portrait',                  // frame preset; `auto` follows the first photo
+  exportSize: 2048,                  // longest side in pixels
+  format: 'image/jpeg',              // starting format of the format control
   locale: 'vi',
   onSave(blob, state) {
     // Upload the blob, or keep `state` to reopen the same document later.
@@ -287,7 +291,7 @@ const collage = createCollageEditor('#collage', {
 
 await collage.ready;                  // photos decoded
 collage.addSources([fileD]);          // grows the layout up to nine cells
-collage.setState(savedState);         // layout + one crop per cell
+collage.setState(savedState);         // layout, frame size, background and one crop per cell
 const blob = await collage.exportBlob('image/webp', 0.9);
 ```
 
@@ -298,7 +302,7 @@ const blob = await collage.exportBlob('image/webp', 0.9);
 | `getState()` / `setState(state)` | Defensive copy and normalisation of the collage document. |
 | `setSources(inputs)` / `addSources(inputs)` | Replace (resets crops) or append photos; both cap at nine. |
 | `render()` | Re-render the preview immediately. |
-| `exportBlob(type?, quality?)` | `Promise<Blob \| null>` at `exportSize` (256…4096). |
+| `exportBlob(type?, quality?)` | `Promise<Blob \| null>`; the frame preset keeps its ratio and the longest side is `exportSize` (256…4096). |
 | `save()` | Export, then `onSave(blob, state)` or a download. |
 | `destroy()` | Remove the screen, listeners and pending frames. |
 
